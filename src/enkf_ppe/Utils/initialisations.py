@@ -52,6 +52,22 @@ class GaussianInit(Initialisation):
         return c.expand(N, -1) + std * eps                             # (N, dim)
 
 
+class GaussianInitWithOffset(Initialisation):
+    """
+    Isotropic Gaussian initialisation with gaussianoffset:  center + ε + o,   ε ~ N(0, I), o ~ N(0, σI).
+    """
+    def __init__(self, std: float = 1.0, track_grads: bool = False, offset_std: float = 1.0) -> None:
+        super().__init__()
+        self.log_scale = nn.Parameter(torch.tensor(std).log(), requires_grad=track_grads)
+        self.offset_std = offset_std
+    def forward(self, center: Tensor, N: int) -> Tensor:
+        c   = center.reshape(1, -1)                                    # (1, dim)
+        std = self.log_scale.exp()
+        eps = torch.randn(N, c.shape[-1], dtype=c.dtype, device=c.device)
+        offset = torch.randn(1, c.shape[-1], dtype=c.dtype, device=c.device) * self.offset_std
+        return (c + offset).expand(N, -1) + std * eps               # (N, dim)
+
+
 class CovarianceInit(Initialisation):
     """
     Full-covariance Gaussian initialisation:  center + L ε,   ε ~ N(0, I),

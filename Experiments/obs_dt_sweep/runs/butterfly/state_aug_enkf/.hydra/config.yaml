@@ -1,17 +1,8 @@
-# Randomness
 seed: 42
-
-# Ensemble size
 N_ens: 50
-
-# problem setting
 x_dim: 3
 p_dim: 3
-
-# Observation dimension
 m: 3
-
-# initialisation
 state_init:
   _target_: enkf_ppe.Utils.initialisations.GaussianInit
   std: 0.5
@@ -20,9 +11,7 @@ param_init:
   _target_: enkf_ppe.Utils.initialisations.GaussianInit
   std: 0.01
   track_grads: false
-
-# Model
-model: 
+model:
   _target_: enkf_ppe.Models.ENKF.StateAugEnKF
   transition_fn:
     _target_: enkf_ppe.Dynamics.Lorentz63.forward
@@ -46,25 +35,16 @@ model:
     std: 1.0
     track_grads: false
   time_step: 0.01
-
-# Data path from the data directory
 data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt
-
-# Sweep
 sweep:
-  # Number of model integration steps between successive observations.
-  # obs_dt = n_forecasts * data.dt
-  n_forecasts: [1, 2, 5, 10, 20, 50]
-
-# Experiment
+  n_forecasts:
+  - 1
+  - 2
+  - 5
+  - 10
+  - 20
+  - 50
 experiment:
-  T_use: 6000          # cap on total model steps to use from the dataset
-  spinup_frac: 0.2     # fraction of observation steps discarded as spin-up
-  spinup_min: 10       # minimum spin-up steps regardless of spinup_frac
-
-# Hydra
-hydra:
-  job:
-    chdir: false   # keep cwd at the script's directory
-  run:
-    dir: runs/butterfly/state_aug_enkf1
+  T_use: 6000
+  spinup_frac: 0.2
+  spinup_min: 10

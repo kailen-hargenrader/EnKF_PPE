@@ -39,9 +39,8 @@ from enkf_ppe.Utils.initialisations import Initialisation
 from paths import ROOT, DATA_DIR
 
 
-@hydra.main(config_path="configs", config_name="enkf_butterfly", version_base=None)
+@hydra.main(config_path="configs", config_name="enkf_butterly_init_offset", version_base=None)
 def run_experiment(cfg: DictConfig) -> None:
-    torch.manual_seed(cfg.seed)
 
     # ── load truth ──
     data_file = DATA_DIR / cfg.data_path
@@ -76,15 +75,15 @@ def run_experiment(cfg: DictConfig) -> None:
 
     # ── obs_dt sweep ──
     n_forecasts_list = list(cfg.sweep.n_forecasts)
-    obs_dt_list      = [n * dt_model for n in n_forecasts_list]
+    obs_dt_list = [n_fc * dt_model for n_fc in n_forecasts_list]
 
     for n_fc in n_forecasts_list:
+        torch.manual_seed(cfg.seed)
         obs_dt    = n_fc * dt_model
         fname_key = f"obs_dt_{obs_dt:.4f}"
 
         truth_sub = truth[:T_use:n_fc]                       # (T_obs, n_state)
         T_obs     = truth_sub.shape[0]
-        obs_noisy = truth_sub + obs_std * torch.randn_like(truth_sub)
 
         X0 = initial_state(torch.tensor(list(meta["initial_state"])), N_ens)
         theta0 = initial_param(theta_true, N_ens)
@@ -92,13 +91,13 @@ def run_experiment(cfg: DictConfig) -> None:
         print(f"obs_dt={obs_dt:.3f}  (n_forecasts={n_fc:2d},  T_obs={T_obs}) ... ",
               end="", flush=True)
 
-        X_hist, theta_hist = model.run(X0, theta0, obs_noisy, dt=obs_dt)
+        X_hist, theta_hist = model.run(X0, theta0, truth_sub, dt=obs_dt)
 
         # RMSE — skip spin-up
         spin      = max(cfg.experiment.spinup_min,
                         int(T_obs * cfg.experiment.spinup_frac))
         mean_hist = X_hist[spin:].mean(dim=1)                # (T_valid, n_state)
-        err       = mean_hist - truth_sub[spin:]
+        err       = mean_hist - truth[spin:T_use]
         rmse_total = err.pow(2).mean().sqrt().item()
         rmse_comp  = err.pow(2).mean(dim=0).sqrt().tolist()
 

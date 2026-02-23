@@ -1,0 +1,3 @@
+This experiment shows that when the observation time step is small, the ensemble mean is able to track the true trajectory well.
+Even when the RMSE was high, the parameter estimates were on far off, this might be a result of x_0 close to the truth.
+Next we will try to offset the truth and see if the parameter estimates can be learned.
