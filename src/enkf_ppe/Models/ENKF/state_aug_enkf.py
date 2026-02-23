@@ -130,7 +130,8 @@ class StateAugEnKF(nn.Module, BaseModel):
         A = (Z_hat - z_bar).T
 
         # Map each forecast member through h
-        Y_hat = self.h(Z_hat)              # (N, m)
+
+        Y_hat = self.h(Z_hat[:, :self.n])              # (N, m)
         y_bar = Y_hat.mean(dim=0)          # (m,)
 
         # Observation-space perturbation matrix  B  (m, N)
@@ -156,7 +157,7 @@ class StateAugEnKF(nn.Module, BaseModel):
         Z_new = Z_hat + (K @ d.T).T        # (N, n+p)
         return Z_new
 
-    def step(self, Z_ens: Tensor, y: Tensor, n_forecasts: int = 1) -> Tensor:
+    def step(self, Z_ens: Tensor, y: Tensor, n_forecasts: int = 1, x_hist: list[Tensor] = None, theta_hist: list[Tensor] = None) -> Tensor:
         """
         One full EnKF cycle: n_forecasts × forecast → analysis.
 
@@ -173,9 +174,15 @@ class StateAugEnKF(nn.Module, BaseModel):
             Z_new: updated analysis ensemble  (N, n+p)
         """
         Z_hat = Z_ens
-        for _ in range(n_forecasts):
+        for i in range(n_forecasts):
             Z_hat = self.forecast(Z_hat)
-        return self.analysis(Z_hat, y)
+            if i != n_forecasts - 1:
+                x_hist.append(Z_hat[:, :self.n])
+                theta_hist.append(Z_hat[:, self.n:])
+        output = self.analysis(Z_hat, y)
+        x_hist.append(output[:, :self.n])
+        theta_hist.append(output[:, self.n:])
+        return output
 
     def run(self, X0: Tensor, theta0: Tensor, observations: Tensor, dt: float) -> [Tensor, Tensor]:
         """
@@ -200,9 +207,7 @@ class StateAugEnKF(nn.Module, BaseModel):
         theta_hist = []
         Z = torch.cat([X0, theta0], dim=-1)  # (N, n+p)
         for y in observations:
-            Z = self.step(Z, y, n_forecasts=n_forecasts)
-            X_hist.append(Z[:, :self.n])
-            theta_hist.append(Z[:, self.n:])
+            Z = self.step(Z, y, n_forecasts=n_forecasts, x_hist=X_hist, theta_hist=theta_hist)
         return torch.stack(X_hist), torch.stack(theta_hist)  # (T, N, n), (T, N, p)
 
     # ------------------------------------------------------------------

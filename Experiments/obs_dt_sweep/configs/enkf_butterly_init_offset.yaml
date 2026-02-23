@@ -17,9 +17,10 @@ state_init:
   std: 0.5
   track_grads: false
 param_init:
-  _target_: enkf_ppe.Utils.initialisations.GaussianInit
+  _target_: enkf_ppe.Utils.initialisations.GaussianInitWithOffset
   std: 0.01
   track_grads: false
+  offset_std: 20.0
 
 # Model
 model: 
@@ -67,4 +68,4 @@ hydra:
   job:
     chdir: false   # keep cwd at the script's directory
   run:
-    dir: runs/butterfly/state_aug_enkf1
+    dir: runs/butterfly/state_aug_enkf_with_offset
