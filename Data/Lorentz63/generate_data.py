@@ -2,43 +2,8 @@ import torch
 import os
 import argparse
 from pathlib import Path
+from enkf_ppe.Dynamics.Lorentz63 import forward
 
-def lorenz_deriv(state, sigma=10.0, rho=28.0, beta=8/3):
-    """
-    Calculates the derivatives of the Lorenz '63 system.
-    
-    Args:
-        state (torch.Tensor): The current state [x, y, z].
-        sigma (float): Prandtl number.
-        rho (float): Rayleigh number.
-        beta (float): Parameter related to the layer dimensions.
-        
-    Returns:
-        torch.Tensor: The derivatives [dx/dt, dy/dt, dz/dt].
-    """
-    x, y, z = state[..., 0], state[..., 1], state[..., 2]
-    dx = sigma * (y - x)
-    dy = x * (rho - z) - y
-    dz = x * y - beta * z
-    return torch.stack([dx, dy, dz], dim=-1)
-
-def rk4_step(state, dt, **params):
-    """
-    Performs one Runge-Kutta 4 (RK4) integration step.
-    
-    Args:
-        state (torch.Tensor): The current state [x, y, z].
-        dt (float): The time step size.
-        **params: Parameters for the Lorenz system (sigma, rho, beta).
-        
-    Returns:
-        torch.Tensor: The state at the next time step.
-    """
-    k1 = lorenz_deriv(state, **params)
-    k2 = lorenz_deriv(state + 0.5 * dt * k1, **params)
-    k3 = lorenz_deriv(state + 0.5 * dt * k2, **params)
-    k4 = lorenz_deriv(state + dt * k3, **params)
-    return state + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
 def generate_dataset(num_steps, dt=0.01, sigma=10.0, rho=28.0, beta=8/3, initial_state=None):
     """
@@ -54,12 +19,13 @@ def generate_dataset(num_steps, dt=0.01, sigma=10.0, rho=28.0, beta=8/3, initial
     """
     metadata = {
         'num_steps': num_steps,
-        'sigma': sigma,
-        'rho': rho,
-        'beta': beta,
+        'parameters': {
+            'sigma': sigma,
+            'rho': rho,
+            'beta': beta,
+        },
         'dt': dt,
         'initial_state': initial_state.tolist()
-
     }
     
     # Generate filename from metadata
@@ -102,12 +68,10 @@ def generate_dataset(num_steps, dt=0.01, sigma=10.0, rho=28.0, beta=8/3, initial
     new_points = []
     current_state = start_state
     
-    # params for lorenz_deriv
-    ode_params = {'sigma': sigma, 'rho': rho, 'beta': beta}
-    
-    
+    theta = torch.tensor([sigma, rho, beta], dtype=torch.float32)
+
     for _ in range(remaining_steps):
-        current_state = rk4_step(current_state, dt, **ode_params)
+        current_state = forward(current_state, theta, dt=dt)
         new_points.append(current_state.clone())
     
     # 4. Concatenate and save
@@ -134,7 +98,7 @@ if __name__ == "__main__":
     parser.add_argument("--steps", type=int, default=10000, help="Number of integration steps to generate.")
     parser.add_argument("--dt", type=float, default=0.01, help="Time step size.")
     parser.add_argument("--sigma", type=float, default=10.0, help="Lorenz parameter sigma.")
-    parser.add_argument("--rho", type=float, default=99.96, help="Lorenz parameter rho.")
+    parser.add_argument("--rho", type=float, default=28.0, help="Lorenz parameter rho.")
     parser.add_argument("--beta", type=float, default=8/3, help="Lorenz parameter beta.")
     parser.add_argument("--x0", type=float, nargs=3, default=[1.0, 1.0, 1.0], help="Initial state [x, y, z] if starting fresh.")
 
