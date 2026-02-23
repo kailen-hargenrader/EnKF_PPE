@@ -73,9 +73,9 @@ class Lorenz63(nn.Module):
     self.x_dim = x_dim
   
   def forward(self, t, u):
-    # (*bs * x_dim) -> (*bs * x_dim)
-    sigma, beta, rho = self.coeff
-    out = torch.stack((sigma * (u[...,1] - u[...,0]), rho * u[...,0] - u[...,1] - u[...,0] * u[...,2], u[...,0] * u[...,1] - beta * u[...,2]), dim=-1)
+    # (*bs * x_dim) -> (*bs * x_dim). coeff order (sigma, rho, beta) to match EnKF_PPE Lorentz63.
+    sigma, rho, beta = self.coeff
+    out = torch.stack((sigma * (u[...,1] - u[...,0]), u[...,0] * (rho - u[...,2]) - u[...,1], u[...,0] * u[...,1] - beta * u[...,2]), dim=-1)
     return out
 
 class Linear(nn.Module):

@@ -20,9 +20,9 @@ torch.manual_seed(seed)
 np.random.seed(seed)
 random.seed(seed)
 
-######### Define reference model #########
+######### Define reference model (sigma, rho, beta — same order as EnKF_PPE Lorentz63) #########
 x_dim = 3
-true_coeff = torch.tensor([10., 8/3, 28.], device=device)
+true_coeff = torch.tensor([10., 28., 8/3], device=device)  # sigma, rho, beta
 true_ode_func = nn_templates.Lorenz63(true_coeff).to(device)
 
 ######### Draw x0 from the L63 attractor (short warmup) #########
@@ -69,7 +69,7 @@ init_C_param = noise.AddGaussian(
     'full'
 ).to(device)
 
-init_coeff = torch.tensor([5., 1., 15.], device=device)
+init_coeff = torch.tensor([5., 15., 1.], device=device)  # sigma, rho, beta (deliberately off true)
 learned_ode_func = nn_templates.Lorenz63(init_coeff).to(device)
 
 init_Q = 0.05 * torch.ones(x_dim)
@@ -126,23 +126,23 @@ for epoch in tqdm(range(150), desc="Training", leave=False):
     scheduler.step()
 
     if epoch % 10 == 0:
-        sigma, beta, rho = learned_ode_func.coeff.data.cpu()
+        sigma, rho, beta = learned_ode_func.coeff.data.cpu()
         tqdm.write(
             f"Epoch {epoch} | LL: {train_log_likelihood.mean().item():.2f} | "
             f"sigma={sigma:.3f} (true=10.000) | "
-            f"beta={beta:.3f} (true=2.667) | "
-            f"rho={rho:.3f} (true=28.000)"
+            f"rho={rho:.3f} (true=28.000) | "
+            f"beta={beta:.3f} (true=2.667)"
         )
 
     with torch.no_grad():
         q_scale = torch.sqrt(torch.trace(learned_model_Q.full()) / x_dim)
-        sigma, beta, rho = learned_ode_func.coeff.tolist()
-        monitor.append([sigma, beta, rho, q_scale.item(), train_log_likelihood.mean().item()])
+        sigma, rho, beta = learned_ode_func.coeff.tolist()
+        monitor.append([sigma, rho, beta, q_scale.item(), train_log_likelihood.mean().item()])
 
 ######### Plot results #########
 monitor = np.asarray(monitor)
-true_vals = [10., 8/3, 28.]
-param_names = ['sigma', 'beta', 'rho']
+true_vals = [10., 28., 8/3]  # sigma, rho, beta
+param_names = ['sigma', 'rho', 'beta']
 
 fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
