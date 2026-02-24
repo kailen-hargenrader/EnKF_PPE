@@ -13,6 +13,15 @@ Override config:
   python torchEnKF/experiments/l63_param_est/l63_param_est_run.py data_path=null
 """
 
+from examples import generate_data
+from torchEnKF import da_methods, nn_templates, noise
+from paths import DATA_DIR
+from torchdiffeq import odeint
+from tqdm import tqdm
+from omegaconf import DictConfig, OmegaConf
+import hydra
+import numpy as np
+import torch
 from pathlib import Path
 import sys
 import random
@@ -23,17 +32,6 @@ _torch_enkf_dir = _script_dir.parent.parent
 _repo_root = _torch_enkf_dir.parent
 sys.path.insert(0, str(_repo_root))
 sys.path.insert(0, str(_torch_enkf_dir))
-
-import torch
-import numpy as np
-import hydra
-from omegaconf import DictConfig, OmegaConf
-from tqdm import tqdm
-from torchdiffeq import odeint
-
-from paths import DATA_DIR
-from torchEnKF import da_methods, nn_templates, noise
-from examples import generate_data
 
 
 def _setup_device():
@@ -51,7 +49,8 @@ def _load_data_from_file(data_path: str, n_forecasts: int, n_obs: int, obs_std: 
     truth = data[::obs_dt_steps][:n_obs]  # (n_obs, 3)
     if truth.shape[0] < n_obs:
         raise ValueError(
-            f"Data has {truth.shape[0]} obs after subsampling; need at least n_obs={n_obs}. "
+            f"Data has {truth.shape[0]} obs after subsampling; need at least n_obs={
+                n_obs}. "
             "Increase dataset length or reduce n_obs / n_forecasts."
         )
     truth = truth.to(device)
@@ -59,7 +58,8 @@ def _load_data_from_file(data_path: str, n_forecasts: int, n_obs: int, obs_std: 
     torch.manual_seed(42)  # reproducible obs noise
     y_obs = truth + obs_std * torch.randn_like(truth)
     # Initial state from metadata (for consistency; we use single trajectory from file)
-    initial_state = torch.tensor(meta["initial_state"], dtype=torch.float32, device=device)
+    initial_state = torch.tensor(
+        meta["initial_state"], dtype=torch.float32, device=device)
     # True params (sigma, rho, beta) from metadata
     params = meta["parameters"]
     true_coeff = torch.tensor(
@@ -96,7 +96,8 @@ def _generate_data_in_memory(cfg: DictConfig, device):
     t_obs = obs_dt * torch.arange(1, n_obs + 1, device=device)
     H = torch.eye(x_dim, device=device)
     true_obs_func = nn_templates.Linear(x_dim, x_dim, H=H).to(device)
-    noise_R = noise.AddGaussian(x_dim, torch.tensor(cfg.obs_std), param_type="scalar").to(device)
+    noise_R = noise.AddGaussian(x_dim, torch.tensor(
+        cfg.obs_std), param_type="scalar").to(device)
     with torch.no_grad():
         x_truth, y_obs = generate_data.generate(
             true_ode_func, true_obs_func, t_obs, x0,
@@ -135,10 +136,11 @@ def run(cfg: DictConfig) -> None:
         x_truth, y_obs, true_coeff, initial_state, t_obs, dt, train_size = out
         truth = x_truth
 
-    true_ode_func = nn_templates.Lorenz63(true_coeff).to(device)
+    # true_ode_func = nn_templates.Lorenz63(true_coeff).to(device)
     H_true = torch.eye(x_dim, device=device)
     true_obs_func = nn_templates.Linear(x_dim, x_dim, H=H_true).to(device)
-    noise_R_true = noise.AddGaussian(x_dim, torch.tensor(cfg.obs_std), param_type="scalar").to(device)
+    noise_R_true = noise.AddGaussian(x_dim, torch.tensor(
+        cfg.obs_std), param_type="scalar").to(device)
 
     # When using data file, perturb around file's initial state (match EnKF_PPE); else around zero
     if cfg.get("data_path") and str(cfg.data_path).lower() not in ("none", "null"):
@@ -212,7 +214,8 @@ def run(cfg: DictConfig) -> None:
         if epoch % 10 == 0:
             sigma, rho, beta = learned_ode_func.coeff.data.cpu()
             tqdm.write(
-                f"Epoch {epoch} | LL: {train_log_likelihood.mean().item():.2f} | "
+                f"Epoch {epoch} | LL: {
+                    train_log_likelihood.mean().item():.2f} | "
                 f"sigma={sigma:.3f} (true=10.000) | "
                 f"rho={rho:.3f} (true=28.000) | "
                 f"beta={beta:.3f} (true=2.667)"
@@ -220,10 +223,13 @@ def run(cfg: DictConfig) -> None:
         with torch.no_grad():
             q_scale = torch.sqrt(torch.trace(learned_model_Q.full()) / x_dim)
             s, r, b = learned_ode_func.coeff.tolist()
-            monitor.append([s, r, b, q_scale.item(), train_log_likelihood.mean().item()])
+            monitor.append(
+                [s, r, b, q_scale.item(), train_log_likelihood.mean().item()])
 
+    # Shape: (n_epochs, 5) with columns [sigma, rho, beta, q_scale, log_likelihood]
     monitor = np.asarray(monitor)
-    true_vals = [cfg.true_params.sigma, cfg.true_params.rho, cfg.true_params.beta]
+    true_vals = [cfg.true_params.sigma,
+                 cfg.true_params.rho, cfg.true_params.beta]
     param_names = ["sigma", "rho", "beta"]
 
     import matplotlib
@@ -234,7 +240,8 @@ def run(cfg: DictConfig) -> None:
     ax = axes[0]
     for i, (name, true_val) in enumerate(zip(param_names, true_vals)):
         line, = ax.plot(monitor[:, i], label=f"{name} (learned)")
-        ax.axhline(true_val, color=line.get_color(), linestyle="--", alpha=0.5, label=f"{name} true={true_val:.2f}")
+        ax.axhline(true_val, color=line.get_color(), linestyle="--",
+                   alpha=0.5, label=f"{name} true={true_val:.2f}")
     ax.set_title("Parameter convergence")
     ax.set_xlabel("Epoch")
     ax.legend(fontsize=8)
@@ -257,16 +264,72 @@ def run(cfg: DictConfig) -> None:
     plt.close()
     print(f"Plot saved to {plot_path}")
 
-    torch.save(
-        {
-            "monitor": monitor,
+    # ------------------------------------------------------------------
+    # Save results in a format compatible with visualize_dataset.py:
+    #   - 'data': (N, 3) tensor visualised as a 3D trajectory, here the
+    #             learned (sigma, rho, beta) over training epochs.
+    #   - 'metadata': free-form dict used only for plot title.
+    # Avoid storing NumPy arrays so that torch.load(..., weights_only=True)
+    # works without unsafe NumPy pickling.
+    # ------------------------------------------------------------------
+    monitor_list = monitor.tolist()
+    data = torch.tensor([[row[0], row[1], row[2]]
+                        for row in monitor_list], dtype=torch.float32)
+
+    results = {
+        "data": data,
+        "metadata": {
+            "description": "L63 parameter estimates trajectory (sigma, rho, beta) over training epochs",
             "param_names": param_names,
             "true_vals": true_vals,
-            "hydra_cfg": OmegaConf.to_container(cfg, resolve=True),
+            "epochs": cfg.epochs,
         },
-        run_dir / "l63_param_est_results.pt",
-    )
-    print(f"Results saved to {run_dir / 'l63_param_est_results.pt'}")
+        "monitor": monitor_list,
+        "param_names": param_names,
+        "true_vals": true_vals,
+        "hydra_cfg": OmegaConf.to_container(cfg, resolve=True),
+    }
+
+    results_path = run_dir / "l63_param_est_results.pt"
+    torch.save(results, results_path)
+    print(f"Results saved to {results_path}")
+
+    # ------------------------------------------------------------------
+    # Additionally, generate a Lorenz '63 trajectory using the FINAL
+    # estimated parameters and save it in the same (N, 3) + metadata
+    # format used by Data/Lorentz63/generate_data.py so it can be
+    # visualised directly with visualize_dataset.py.
+    # ------------------------------------------------------------------
+    with torch.no_grad():
+        sigma_est, rho_est, beta_est = learned_ode_func.coeff.detach().cpu().tolist()
+
+        total_time = cfg.n_forecasts * cfg.n_obs * cfg.dt
+        t_eval = torch.arange(0.0, total_time + cfg.dt, cfg.dt, device=device)
+        traj = odeint(
+            learned_ode_func,
+            initial_state,
+            t_eval,
+            method=cfg.ode_method,
+            options=dict(step_size=cfg.ode_step_size),
+        )
+
+    # traj: (T, 3) states [x, y, z]
+    traj_cpu = traj.detach().cpu()
+    est_dataset = {
+        "data": traj_cpu,
+        "metadata": {
+            "sigma": sigma_est,
+            "rho": rho_est,
+            "beta": beta_est,
+            "dt": cfg.dt,
+            "initial_state": initial_state.detach().cpu().tolist(),
+            "description": "Lorenz '63 trajectory generated with estimated parameters from l63_param_est_run",
+        },
+    }
+
+    est_path = run_dir / "l63_estimated_traj.pt"
+    torch.save(est_dataset, est_path)
+    print(f"Estimated trajectory dataset saved to {est_path}")
 
 
 if __name__ == "__main__":

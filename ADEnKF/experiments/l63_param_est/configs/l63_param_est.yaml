@@ -17,12 +17,12 @@ m: 3
 true_params:
   sigma: 10.0
   rho: 28.0
-  beta: 2.6666666666666665  # 8/3
+  beta: 2.7
 
 # Initial parameter guess for learning (sigma, rho, beta) — deliberately off true
 init_params:
-  sigma: 5.0
-  rho: 15.0
+  sigma: 1.0
+  rho: 1.0
   beta: 1.0
 
 # Model integration (match enkf_butterfly time_step)
@@ -30,7 +30,7 @@ dt: 0.01
 
 # Data: same file as enkf_butterfly so we use the same truth trajectory
 # Set to null to generate in-memory with true_params + warmup instead
-data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt
+data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.7000_dt0.0100.pt
 
 # Observation setup
 # n_forecasts: model steps between observations → obs_dt = n_forecasts * dt
