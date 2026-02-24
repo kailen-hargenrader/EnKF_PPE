@@ -11,6 +11,10 @@ p_dim: 3
 # Observation dimension
 m: 3
 
+# Initial parameter center for ensemble (sigma, rho, beta) — match AD-EnKF init_params for comparable runs
+# If omitted, theta_true from data is used.
+initial_theta: [12.0, 20.0, 5.0]
+
 # initialisation
 state_init:
   _target_: enkf_ppe.Utils.initialisations.GaussianInit

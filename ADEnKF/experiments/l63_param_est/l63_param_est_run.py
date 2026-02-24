@@ -158,7 +158,9 @@ def run(cfg: DictConfig) -> None:
         device=device,
     )
     learned_ode_func = nn_templates.Lorenz63(init_coeff).to(device)
-    init_Q = cfg.init_Q_diag_scale * torch.ones(x_dim, device=device)
+    # Process noise Q: per-dimension std (separate from obs_std). Match EnKF process_noise_cov.std when comparing.
+    q_scale = float(cfg.get("process_std", cfg.get("init_Q_diag_scale", 0.05)))
+    init_Q = q_scale * torch.ones(x_dim, device=device)
     learned_model_Q = noise.AddGaussian(x_dim, init_Q, "diag").to(device)
 
     optimizer = torch.optim.Adam([
