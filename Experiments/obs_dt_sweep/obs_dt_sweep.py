@@ -56,7 +56,12 @@ def run_experiment(cfg: DictConfig) -> None:
     obs_std  = cfg.model.obs_noise_cov.std
     proc_std = cfg.model.process_noise_cov.std  
 
-    theta_true = torch.tensor(list(meta["parameters"].values())).unsqueeze(0)  # (1, p)
+    theta_true = torch.tensor(list(meta["parameters"].values()))
+    # Use config initial_theta if set (e.g. [12, 20, 5] for comparable AD-EnKF runs), else true params
+    theta_center = torch.tensor(
+        cfg.get("initial_theta", theta_true.tolist()),
+        dtype=theta_true.dtype,
+    ).unsqueeze(0)  # (1, p)
 
     initial_state: Initialisation = instantiate(cfg.state_init)
     initial_param: Initialisation = instantiate(cfg.param_init)
@@ -86,7 +91,7 @@ def run_experiment(cfg: DictConfig) -> None:
         T_obs     = truth_sub.shape[0]
 
         X0 = initial_state(torch.tensor(list(meta["initial_state"])), N_ens)
-        theta0 = initial_param(theta_true, N_ens)
+        theta0 = initial_param(theta_center, N_ens)
 
         print(f"obs_dt={obs_dt:.3f}  (n_forecasts={n_fc:2d},  T_obs={T_obs}) ... ",
               end="", flush=True)

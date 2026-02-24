@@ -100,7 +100,7 @@ if __name__ == "__main__":
     parser.add_argument("--sigma", type=float, default=10.0, help="Lorenz parameter sigma.")
     parser.add_argument("--rho", type=float, default=28.0, help="Lorenz parameter rho.")
     parser.add_argument("--beta", type=float, default=8/3, help="Lorenz parameter beta.")
-    parser.add_argument("--x0", type=float, nargs=3, default=[1.0, 1.0, 1.0], help="Initial state [x, y, z] if starting fresh.")
+    parser.add_argument("--x0", type=float, nargs=3, default=[12.0, 20.0, 5.0], help="Initial state [x, y, z] if starting fresh.")
 
     args = parser.parse_args()
     

@@ -17,20 +17,20 @@ m: 3
 true_params:
   sigma: 10.0
   rho: 28.0
-  beta: 2.6666666666666665  # 8/3
+  beta: 8/3
 
 # Initial parameter guess for learning (sigma, rho, beta) — deliberately off true
 init_params:
-  sigma: 5.0
-  rho: 15.0
-  beta: 1.0
+  sigma: 12.0
+  rho: 20.0
+  beta: 5.0
 
 # Model integration (match enkf_butterfly time_step)
 dt: 0.01
 
 # Data: same file as enkf_butterfly so we use the same truth trajectory
 # Set to null to generate in-memory with true_params + warmup instead
-data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt
+data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.7000_dt0.0100.pt
 
 # Observation setup
 # n_forecasts: model steps between observations → obs_dt = n_forecasts * dt
@@ -38,11 +38,15 @@ n_forecasts: 5
 n_obs: 400
 obs_std: 1.0
 
+# Process noise (Q) — separate from observation noise; match EnKF process_noise_cov.std for comparison
+# Used as initial per-dimension std for the learned model Q (diagonal covariance).
+process_std: 0.5
+
 # Initial state ensemble (match enkf_butterfly state_init spread)
 state_init_std: 0.5
-init_cov_diag: [25.0, 25.0, 50.0]
+init_cov_diag: [25.0, 25.0, 50.0] # var = 0.25 per dimension in EnKF (potentially change)
 
-# Process noise (Q) initialisation for learned model
+# Legacy: initial Q scale if process_std not set (default 0.05)
 init_Q_diag_scale: 0.05
 
 # Training
