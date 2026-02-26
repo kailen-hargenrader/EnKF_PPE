@@ -9,8 +9,8 @@ p_dim: 18    # length of theta (r_i and non-zero A_ij entries)
 
 # Data files (relative to Data/)
 # Default: well-specified baseline a_hidden = 0.00
-data_truth_path: gLV/data_full_obs/glv_ahidden0p00_truth.npz
-data_obs_path:   gLV/data_full_obs/glv_ahidden0p00_obs.npz
+data_truth_path: gLV/data/glv_ahidden0p00_truth.npz
+data_obs_path:   gLV/data/glv_ahidden0p00_obs.npz
 
 # Initial parameter guess: scaled version of truth (do not use 0: zero params → degenerate dynamics and NaN)
 init_theta_scale: 0.8
