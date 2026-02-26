@@ -267,8 +267,8 @@ def generate_observations(X_true, obs_species, obs_noise_std, rng=None):
 # ---------------------------------------------------------------------------
 
 def generate_experiment(a_hidden, seed, dt=0.5, t_end=100.0,
-                        process_noise_std=0.02, obs_noise_std=OBS_NOISE_STD,
-                        save_dir='./data'):
+                        process_noise_std=0.00, obs_noise_std=OBS_NOISE_STD,
+                        save_dir='./data_no_noise'):
     """
     Generates and saves one complete dataset for a given a_hidden value.
 
@@ -347,7 +347,7 @@ def main():
     parser.add_argument('--seed',     type=int,   default=0)
     parser.add_argument('--dt',       type=float, default=0.5)
     parser.add_argument('--t_end',    type=float, default=100.0)
-    parser.add_argument('--save_dir', type=str,   default='./data')
+    parser.add_argument('--save_dir', type=str,   default='./data_no_noise')
     args = parser.parse_args()
 
     sweep = [args.a_hidden] if args.a_hidden is not None else A_HIDDEN_SWEEP

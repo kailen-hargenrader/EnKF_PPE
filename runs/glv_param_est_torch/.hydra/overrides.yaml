@@ -1,0 +1,3 @@
+- lr=0.01
+- process_std=0.0
+- init_theta_scale=1.0

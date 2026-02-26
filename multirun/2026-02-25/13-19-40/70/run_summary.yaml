@@ -1,0 +1,12 @@
+final_l2_error: 0.6309586763381958
+final_ll: 774.6806030273438
+best_ll: 779.0916748046875
+best_ll_epoch: 164
+epochs: 200
+data_truth_path: gLV/data/glv_ahidden0p00_truth.npz
+data_obs_path: gLV/data/glv_ahidden0p00_obs.npz
+init_theta_scale: 0.8
+lr: 0.02
+process_std: 0.02
+N_ens: 100
+chunk_length: 10

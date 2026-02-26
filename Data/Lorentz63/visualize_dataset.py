@@ -97,7 +97,7 @@ def visualize_dataset(file_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize a Lorenz '63 dataset in 3D using Plotly.")
-    parser.add_argument("--file", type=str, default="sigma10.0000_rho28.0000_beta2.7000_dt0.0100.pt", help="Path to the .pt file.")
+    parser.add_argument("--file", type=str, default="sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt", help="Path to the .pt file.")
     
     args = parser.parse_args()
     visualize_dataset(args.file)
