@@ -240,7 +240,7 @@ def run(cfg: DictConfig) -> None:
     log(f"  epochs            = {cfg.epochs}")
     log(f"  chunk_length      = {cfg.chunk_length}")
     log("=" * 60)
-    log(f"{'Epoch':>6}  {'||θ-θ_true||_2':>16}  {'Log-likelihood':>16}")
+    log(f"{'Epoch':>6}  {'||θ-θ_true||_2':>16}  {'Log-likelihood':>16}  {'tr(C_ens)':>12}  {'min_std_dim':>12}")
     log("-" * 60)
 
     torch.manual_seed(cfg.seed)
@@ -293,7 +293,13 @@ def run(cfg: DictConfig) -> None:
     ).to(device)
 
     # Parameter initialisation: scaled version of truth (keeps sparsity pattern)
-    init_theta = theta_true * float(cfg.init_theta_scale)
+    init_theta_scale = float(cfg.init_theta_scale)
+    if init_theta_scale < 1e-6:
+        raise ValueError(
+            "init_theta_scale must be > 0 (e.g. 0.5 or 1.0). "
+            "Zero gives degenerate gLV dynamics (dx/dt=0) and leads to NaN."
+        )
+    init_theta = theta_true * init_theta_scale
     learned_ode_func = GLVParamODE(init_theta, theta_labels, x_dim=x_dim).to(device)
 
     # Process noise Q: per-dimension std
@@ -353,6 +359,13 @@ def run(cfg: DictConfig) -> None:
             t_start = t_obs[end - 1]
             (-log_likelihood).mean().backward()
             train_log_likelihood += log_likelihood.detach().clone()
+            # Gradient clipping to avoid NaN from exploding gradients (gLV is sensitive)
+            clip_norm = cfg.get("clip_grad_norm")
+            if clip_norm is not None and float(clip_norm) > 0:
+                torch.nn.utils.clip_grad_norm_(
+                    list(learned_ode_func.parameters()) + list(learned_model_Q.parameters()),
+                    max_norm=float(clip_norm),
+                )
             optimizer.step()
 
         scheduler.step()
@@ -362,15 +375,24 @@ def run(cfg: DictConfig) -> None:
             ll_val = train_log_likelihood.mean().item()
             q_scale = torch.sqrt(torch.trace(learned_model_Q.full()) / x_dim)
             theta_cpu = learned_ode_func.theta.detach().cpu().numpy().tolist()
-            monitor.append(theta_cpu + [q_scale.item(), ll_val])
+
+            # Ensemble spread (collapse monitoring): X shape (train_size, N_ensem, x_dim)
+            X_mean = X.mean(dim=1, keepdim=True)
+            X_ct = X - X_mean
+            var_per_dim = (X_ct ** 2).sum(dim=1) / max(N_ensem - 1, 1)  # (train_size, x_dim)
+            trace_ens_cov = float(var_per_dim.sum().item())
+            min_std_dim = float((var_per_dim.clamp(min=1e-20).min().item()) ** 0.5)
+
+            monitor.append(theta_cpu + [q_scale.item(), ll_val, trace_ens_cov, min_std_dim])
 
         # Write every epoch to log file (formatted)
-        log(f"{epoch:6d}  {l2_err:16.6e}  {ll_val:16.4f}")
+        log(f"{epoch:6d}  {l2_err:16.6e}  {ll_val:16.4f}  {trace_ens_cov:12.4e}  {min_std_dim:12.4e}")
 
         if epoch % 10 == 0:
             tqdm.write(
                 f"Epoch {epoch} | LL: {ll_val:.2f} | "
-                f"||theta - theta_true||_2 = {l2_err:.3e}"
+                f"||θ-θ_true||_2 = {l2_err:.3e} | "
+                f"tr(C_ens) = {trace_ens_cov:.3e} | min_std_dim = {min_std_dim:.3e}"
             )
 
     # ----------------------------------------------------------------------
@@ -378,9 +400,10 @@ def run(cfg: DictConfig) -> None:
     # ----------------------------------------------------------------------
     monitor_arr = np.asarray(monitor)
     p_dim = theta_true.numel()
-    if monitor_arr.shape[1] != p_dim + 2:
+    # monitor columns: theta (p_dim), q_scale, ll, trace_ens_cov, min_std_dim
+    if monitor_arr.shape[1] != p_dim + 4:
         raise RuntimeError(
-            f"Monitor has unexpected shape {monitor_arr.shape}; expected (*, {p_dim + 2})."
+            f"Monitor has unexpected shape {monitor_arr.shape}; expected (*, {p_dim + 4})."
         )
 
     with torch.no_grad():
@@ -388,6 +411,9 @@ def run(cfg: DictConfig) -> None:
     final_ll = float(monitor_arr[-1, p_dim + 1])
     best_ll = float(monitor_arr[:, p_dim + 1].max())
     best_ll_epoch = int(monitor_arr[:, p_dim + 1].argmax())
+    final_trace_ens = float(monitor_arr[-1, p_dim + 2])
+    final_min_std_dim = float(monitor_arr[-1, p_dim + 3])
+    min_std_dim_over_time = float(monitor_arr[:, p_dim + 3].min())
 
     log("-" * 60)
     log("Summary")
@@ -395,6 +421,10 @@ def run(cfg: DictConfig) -> None:
     log(f"  Final  ||θ - θ_true||_2  = {final_l2_error:.6e}")
     log(f"  Final  log-likelihood   = {final_ll:.4f}")
     log(f"  Best   log-likelihood   = {best_ll:.4f}  (epoch {best_ll_epoch})")
+    log("  Ensemble spread (collapse check):")
+    log(f"    Final  tr(C_ens)     = {final_trace_ens:.6e}")
+    log(f"    Final  min_std_dim   = {final_min_std_dim:.6e}")
+    log(f"    Minimum min_std_dim  = {min_std_dim_over_time:.6e}  (over all epochs)")
     log("=" * 60)
     log_file.close()
 
@@ -403,6 +433,9 @@ def run(cfg: DictConfig) -> None:
         "final_ll": final_ll,
         "best_ll": best_ll,
         "best_ll_epoch": best_ll_epoch,
+        "final_ensemble_trace_cov": final_trace_ens,
+        "final_min_std_dim": final_min_std_dim,
+        "min_min_std_dim": min_std_dim_over_time,
         "epochs": int(cfg.epochs),
         "data_truth_path": str(cfg.get("data_truth_path", "")),
         "data_obs_path": str(cfg.get("data_obs_path", "")),
@@ -417,6 +450,43 @@ def run(cfg: DictConfig) -> None:
         OmegaConf.save(OmegaConf.create(summary), f)
     print(f"Run summary written to {summary_path}")
 
+    # ----------------------------------------------------------------------
+    # Write final r and A estimates in same format as glv_data_generator.py
+    # ----------------------------------------------------------------------
+    with torch.no_grad():
+        r_est, A_est = learned_ode_func._unpack_theta()
+        r_np = r_est.detach().cpu().numpy()
+        A_np = A_est.detach().cpu().numpy()
+
+    params_path = run_dir / "glv_estimated_params.py"
+    with open(params_path, "w", encoding="utf-8") as f:
+        f.write('"""\n')
+        f.write("gLV parameter estimates from AD-EnKF (glv_param_est_run).\n")
+        f.write("Same format as Data/gLV/glv_data_generator.py: R = growth rates, A = interaction matrix.\n")
+        f.write("Convention: A[i,j] = effect of species j on species i's per-capita growth rate.\n")
+        f.write('"""\n\n')
+        f.write("import numpy as np\n\n")
+        f.write("# Intrinsic growth rates (r_1 .. r_5)\n")
+        f.write("R_EST = np.array([")
+        f.write(", ".join(f"{x:.6g}" for x in r_np))
+        f.write("])\n\n")
+        f.write("# Interaction matrix A[i,j] = effect of j on i (same layout as A_TRUE in glv_data_generator)\n")
+        f.write("# fmt: off\n")
+        f.write("A_EST = np.array([\n")
+        row_comments = [
+            "  # prod1:    self-reg; loss to herb3",
+            "  # prod2:    self-reg; loss to herb4",
+            "  # herb3:    gain from prod1; loss to predator",
+            "  # herb4:    gain from prod2; loss to predator",
+            "  # predator: gain from herb3 and herb4",
+        ]
+        for i in range(5):
+            row = ", ".join(f"{A_np[i, j]:8.4f}" for j in range(5))
+            f.write(f"    [{row}],{row_comments[i]}\n")
+        f.write("])\n")
+        f.write("# fmt: on\n")
+    print(f"Estimated parameters (R_EST, A_EST) written to {params_path}")
+
     true_vals = theta_true.detach().cpu().numpy().tolist()
     param_names = list(theta_labels)
 
@@ -425,7 +495,7 @@ def run(cfg: DictConfig) -> None:
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, 3, figsize=(18, 4))
+    fig, axes = plt.subplots(1, 4, figsize=(20, 4))
 
     # Panel 0: all parameters vs epoch
     ax0 = axes[0]
@@ -453,6 +523,20 @@ def run(cfg: DictConfig) -> None:
     axes[2].set_title("Training log-likelihood")
     axes[2].set_xlabel("Epoch")
     axes[2].set_ylabel("Log-likelihood")
+
+    # Panel 3: ensemble spread (collapse monitoring)
+    ax3 = axes[3]
+    ax3.plot(monitor_arr[:, p_dim + 2], label="tr(C_ens)", color="C0")
+    ax3.set_ylabel("tr(C_ens)", color="C0")
+    ax3.tick_params(axis="y", labelcolor="C0")
+    ax3_twin = ax3.twinx()
+    ax3_twin.plot(monitor_arr[:, p_dim + 3], label="min_std_dim", color="C1")
+    ax3_twin.set_ylabel("min_std_dim", color="C1")
+    ax3_twin.tick_params(axis="y", labelcolor="C1")
+    ax3.set_title("Ensemble spread (collapse check)")
+    ax3.set_xlabel("Epoch")
+    ax3.set_yscale("log")
+    ax3_twin.set_yscale("log")
 
     plt.tight_layout()
 

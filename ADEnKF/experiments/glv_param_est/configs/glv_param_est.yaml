@@ -1,7 +1,7 @@
 seed: 42
 
 # Ensemble size
-N_ens: 50
+N_ens: 300
 
 # Problem dimensions
 x_dim: 5     # number of species
@@ -12,7 +12,7 @@ p_dim: 18    # length of theta (r_i and non-zero A_ij entries)
 data_truth_path: gLV/data_no_noise/glv_ahidden0p00_truth.npz
 data_obs_path:   gLV/data_no_noise/glv_ahidden0p00_obs.npz
 
-# Initial parameter guess: scaled version of truth
+# Initial parameter guess: scaled version of truth (do not use 0: zero params → degenerate dynamics and NaN)
 init_theta_scale: 0.8
 
 # Process noise (Q): initial per-dimension std for learned model noise
@@ -23,9 +23,11 @@ init_Q_diag_scale: 0.05
 init_cov_diag: [0.25 , 0.25, 0.25, 0.25, 0.25]
 
 # Training
-epochs: 200
-chunk_length: 30
+epochs: 10
+chunk_length: 20
 lr: 0.01
+# Gradient clipping to avoid NaN from exploding gradients (set to null to disable)
+clip_grad_norm: 1.0
 lr_lambda_epoch_start: 40
 lr_lambda_exponent: -0.5
 
@@ -44,5 +46,5 @@ hydra:
   job:
     chdir: false
   run:
-    dir: runs/glv_param_est_torch_1
+    dir: runs/glv_param_est_torch_2
 
