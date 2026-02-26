@@ -26,14 +26,15 @@ Experiment design (misspecification sweep):
 
 Usage
 -----
-    python glv_data_generator.py                    # runs full sweep
+    python glv_data_generator.py                    # runs full sweep (partial obs: P1, P2, H3)
     python glv_data_generator.py --a_hidden 0.0     # single value
-    python glv_data_generator.py --a_hidden 0.15 --seed 42
+    python glv_data_generator.py --observe_all      # all 5 species observed
+    python glv_data_generator.py --a_hidden 0.15 --observe_all --save_dir ./data_full_obs
 
-Output (saved to ./data/)
---------------------------
+Output (saved to ./data/ or --save_dir)
+---------------------------------------
     glv_ahidden<value>_truth.npz  : true trajectories, parameters, time grid
-    glv_ahidden<value>_obs.npz    : noisy partial observations (species 1, 2, 3)
+    glv_ahidden<value>_obs.npz    : noisy observations (Y, H, observed_species)
 
 For visualisation and diagnostics, see:
     glv_diagnostics.py   — equilibrium verification, limit cycle detection
@@ -82,7 +83,8 @@ A_HIDDEN_SWEEP = [0.0, 0.05, 0.10, 0.15, 0.20]
 
 # Observation settings
 OBS_NOISE_STD    = 0.05
-OBSERVED_SPECIES = [0, 1, 2]   # Producer 1, Producer 2, Herbivore 3
+OBSERVED_SPECIES = [0, 1, 2]   # Default: Producer 1, Producer 2, Herbivore 3 (partial obs)
+N_SPECIES        = 5
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +270,7 @@ def generate_observations(X_true, obs_species, obs_noise_std, rng=None):
 
 def generate_experiment(a_hidden, seed, dt=0.5, t_end=100.0,
                         process_noise_std=0.00, obs_noise_std=OBS_NOISE_STD,
-                        save_dir='./data_no_noise'):
+                        save_dir='./data', observed_species=None):
     """
     Generates and saves one complete dataset for a given a_hidden value.
 
@@ -281,6 +283,9 @@ def generate_experiment(a_hidden, seed, dt=0.5, t_end=100.0,
     process_noise_std : std of log-space process noise added to true trajectory
     obs_noise_std     : std of additive Gaussian observation noise
     save_dir          : directory to write output files
+    observed_species  : list of species indices to observe (0..4). If None, uses
+                        OBSERVED_SPECIES (default partial: [0,1,2]). Use
+                        list(range(5)) or observe_all=True in CLI for all species.
 
     Output files
     ------------
@@ -288,6 +293,9 @@ def generate_experiment(a_hidden, seed, dt=0.5, t_end=100.0,
                                 theta_labels, x0, eps, process_noise_std
     glv_ahidden<X>_obs.npz   : t, Y, H, obs_noise_std, observed_species
     """
+    if observed_species is None:
+        observed_species = OBSERVED_SPECIES
+
     rng   = np.random.default_rng(seed)
     label = f"ahidden{a_hidden:.2f}".replace('.', 'p')
 
@@ -307,7 +315,7 @@ def generate_experiment(a_hidden, seed, dt=0.5, t_end=100.0,
         process_noise_std=process_noise_std, rng=rng
     )
 
-    Y, H = generate_observations(X_true, OBSERVED_SPECIES, obs_noise_std, rng=rng)
+    Y, H = generate_observations(X_true, observed_species, obs_noise_std, rng=rng)
 
     os.makedirs(save_dir, exist_ok=True)
     truth_path = os.path.join(save_dir, f'glv_{label}_truth.npz')
@@ -324,9 +332,11 @@ def generate_experiment(a_hidden, seed, dt=0.5, t_end=100.0,
     np.savez(obs_path,
              t=t_grid, Y=Y, H=H,
              obs_noise_std=obs_noise_std,
-             observed_species=np.array(OBSERVED_SPECIES))
+             observed_species=np.array(observed_species))
 
+    n_obs_species = len(observed_species)
     print(f"[a_hidden={a_hidden:.2f}] Saved: {truth_path}")
+    print(f"[a_hidden={a_hidden:.2f}] Observed species: {n_obs_species}/5  {observed_species}")
     print(f"[a_hidden={a_hidden:.2f}] theta_true ({len(theta_true)} params):")
     for lbl, val in zip(labels, theta_true):
         print(f"    {lbl:8s} = {val: .4f}")
@@ -344,11 +354,15 @@ def main():
     )
     parser.add_argument('--a_hidden', type=float, default=None,
                         help='Single a_hidden value. Omit to run the full sweep.')
+    parser.add_argument('--observe_all', action='store_true',
+                        help='Observe all 5 species (default: only P1, P2, H3).')
     parser.add_argument('--seed',     type=int,   default=0)
     parser.add_argument('--dt',       type=float, default=0.5)
     parser.add_argument('--t_end',    type=float, default=100.0)
-    parser.add_argument('--save_dir', type=str,   default='./data_no_noise')
+    parser.add_argument('--save_dir', type=str,   default='./data')
     args = parser.parse_args()
+
+    observed_species = list(range(N_SPECIES)) if args.observe_all else None
 
     sweep = [args.a_hidden] if args.a_hidden is not None else A_HIDDEN_SWEEP
 
@@ -358,7 +372,8 @@ def main():
             seed=args.seed,
             dt=args.dt,
             t_end=args.t_end,
-            save_dir=args.save_dir
+            save_dir=args.save_dir,
+            observed_species=observed_species,
         )
 
     print("\nDone. Load a dataset with:")

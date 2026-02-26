@@ -2,8 +2,8 @@ seed: 42
 N_ens: 300
 x_dim: 5
 p_dim: 18
-data_truth_path: gLV/data_no_noise/glv_ahidden0p00_truth.npz
-data_obs_path: gLV/data_no_noise/glv_ahidden0p00_obs.npz
+data_truth_path: gLV/data_full_obs/glv_ahidden0p00_truth.npz
+data_obs_path: gLV/data_full_obs/glv_ahidden0p00_obs.npz
 init_theta_scale: 0.8
 process_std: 0.01
 init_Q_diag_scale: 0.05

@@ -1,3 +1,6 @@
 *.pt
 *.png
 *.pyc
+*.npz
+/runs/*
+/multirun/*
