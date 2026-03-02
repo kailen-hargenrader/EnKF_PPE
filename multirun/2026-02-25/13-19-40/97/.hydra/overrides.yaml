@@ -1,5 +1,0 @@
-- init_theta_scale=1.0
-- lr=0.02
-- process_std=0.0
-- N_ens=50
-- chunk_length=20

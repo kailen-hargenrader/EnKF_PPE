@@ -1,2 +1,0 @@
-Here we see that when the initial parameters are offset sufficiently, the solution is far off, or might even diverge.
-When step size is small, the solution is still able to track the truth well.
