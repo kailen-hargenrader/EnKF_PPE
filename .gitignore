@@ -1,6 +1,18 @@
-*.pt
-*.png
-*.pyc
-*.npz
-/runs/*
-/multirun/*
+# ------------------------------------------------------------
+# Local experiment outputs (Hydra / plots / logs)
+# Keep these files locally; do not track in git.
+# ------------------------------------------------------------
+/runs/
+/multirun/
+**/.hydra/
+
+# Some experiments write their own nested runs/ dirs
+Experiments/**/runs/
+ADEnKF/experiments/**/runs/
+
+# ------------------------------------------------------------
+# Python / OS noise
+# ------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.DS_Store
