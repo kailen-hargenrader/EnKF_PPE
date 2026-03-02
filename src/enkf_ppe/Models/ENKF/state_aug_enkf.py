@@ -21,6 +21,7 @@ from typing import Callable
 
 from ..base_model import BaseModel
 from ...Utils.covariances import Covariance
+from ...Utils.rk4 import RK4
 
 
 class StateAugEnKF(nn.Module, BaseModel):
@@ -45,28 +46,20 @@ class StateAugEnKF(nn.Module, BaseModel):
 
     def __init__(
         self,
-        transition_fn:     Callable[[Tensor, Tensor], Tensor],
-        obs_fn:            Callable[[Tensor], Tensor],
         process_noise_cov: Covariance,
         param_noise_cov:   Covariance,
         obs_noise_cov:     Covariance,
-        time_step:         float,
     ) -> None:
         super().__init__()
-        self.psi   = transition_fn
-        self.h     = obs_fn
         self.Sigma = process_noise_cov   # Σ  (n, n)
         self.Omega = param_noise_cov     # Ω  (p, p)
         self.Gamma = obs_noise_cov       # Γ  (m, m)
-        self.n     = process_noise_cov.dim
-        self.p     = param_noise_cov.dim
-        self.dt    = time_step
-
+        self.n = process_noise_cov.dim
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
-    def forecast(self, Z_ens: Tensor) -> Tensor:
+    def forecast(self, Z_ens: Tensor, trans_fn: nn.Module, trans_dt: float) -> Tensor:
         """
         Forecast (predict) step.  Propagates each ensemble member forward:
 
@@ -77,14 +70,17 @@ class StateAugEnKF(nn.Module, BaseModel):
 
         Args:
             Z_ens: current analysis ensemble  (N, n+p)
-
+            trans_fn: the dynamics function (X, Theta) -> dX/dt
+            trans_dt: the transition time step
         Returns:
             Z_hat: forecast ensemble           (N, n+p)
         """
         N = Z_ens.shape[0]
         X, Theta = Z_ens[:, :self.n], Z_ens[:, self.n:]  # (N, n), (N, p)
 
-        X_hat = self.psi(X, Theta)                        # (N, n)
+        psi = RK4(trans_fn)
+
+        X_hat = psi(X, Theta, dt=trans_dt)                        # (N, n)
 
         eta  = self._sample(self.Sigma, N)                 # (N, n)  η ~ N(0, Σ)
         zeta = self._sample(self.Omega, N)                 # (N, p)  ζ ~ N(0, Ω)
@@ -92,7 +88,7 @@ class StateAugEnKF(nn.Module, BaseModel):
         Z_hat = torch.cat([X_hat + eta, Theta + zeta], dim=-1)  # (N, n+p)
         return Z_hat
 
-    def analysis(self, Z_hat: Tensor, y: Tensor) -> Tensor:
+    def analysis(self, Z_hat: Tensor, y: Tensor, obs_fn: nn.Module = None) -> Tensor:
         """
         Analysis (update) step.  Assimilates observation y_k:
 
@@ -131,7 +127,7 @@ class StateAugEnKF(nn.Module, BaseModel):
 
         # Map each forecast member through h
 
-        Y_hat = self.h(Z_hat[:, :self.n])              # (N, m)
+        Y_hat = obs_fn(Z_hat[:, :self.n])              # (N, m)
         y_bar = Y_hat.mean(dim=0)          # (m,)
 
         # Observation-space perturbation matrix  B  (m, N)
@@ -157,7 +153,7 @@ class StateAugEnKF(nn.Module, BaseModel):
         Z_new = Z_hat + (K @ d.T).T        # (N, n+p)
         return Z_new
 
-    def step(self, Z_ens: Tensor, y: Tensor, n_forecasts: int = 1, x_hist: list[Tensor] = None, theta_hist: list[Tensor] = None) -> Tensor:
+    def step(self, Z_ens: Tensor, y: Tensor, n_forecasts: int, x_hist: list[Tensor], theta_hist: list[Tensor], trans_dt: float, trans_fn: nn.Module, obs_fn: nn.Module) -> Tensor:
         """
         One full EnKF cycle: n_forecasts × forecast → analysis.
 
@@ -175,16 +171,16 @@ class StateAugEnKF(nn.Module, BaseModel):
         """
         Z_hat = Z_ens
         for i in range(n_forecasts):
-            Z_hat = self.forecast(Z_hat)
+            Z_hat = self.forecast(Z_hat, trans_fn=trans_fn, trans_dt=trans_dt)
             if i != n_forecasts - 1:
                 x_hist.append(Z_hat[:, :self.n])
                 theta_hist.append(Z_hat[:, self.n:])
-        output = self.analysis(Z_hat, y)
+        output = self.analysis(Z_hat, y, obs_fn=obs_fn)
         x_hist.append(output[:, :self.n])
         theta_hist.append(output[:, self.n:])
         return output
 
-    def run(self, X0: Tensor, theta0: Tensor, observations: Tensor, dt: float) -> [Tensor, Tensor]:
+    def run(self, X0: Tensor, theta0: Tensor, observations: Tensor, trans_dt: float, obs_dt: float, trans_fn: nn.Module, obs_fn: nn.Module) -> [Tensor, Tensor]:
         """
         Run the filter over a full observation sequence.
 
@@ -192,22 +188,24 @@ class StateAugEnKF(nn.Module, BaseModel):
             X0:           initial state ensemble      (N, n)
             theta0:       initial parameter ensemble  (N, p)
             observations: observation time series     (T, m)
-            dt:           time step between observations
-
+            obs_dt:       time step between observations
+            trans_dt:     time step for the model transition
+            trans_fn:     the dynamics function (X, Theta) -> dX/dt
+            obs_fn:       the observation function (X) -> Y_hat
         Returns:
             X_hist:     state history      (T, N, n)
             theta_hist: parameter history  (T, N, p)
         """
 
-        n_forecasts = int(round(dt / self.dt))
-        assert abs(n_forecasts * self.dt - dt) < 1e-9 * dt, (
-            f"model time step ({self.dt}) must divide the observation time step ({dt})"
+        n_forecasts = int(round(obs_dt / trans_dt))
+        assert abs(n_forecasts * trans_dt - obs_dt) < 1e-9 * obs_dt, (
+            f"model time step ({trans_dt}) must divide the observation time step ({obs_dt})"
         )
         X_hist = []
         theta_hist = []
         Z = torch.cat([X0, theta0], dim=-1)  # (N, n+p)
         for y in observations:
-            Z = self.step(Z, y, n_forecasts=n_forecasts, x_hist=X_hist, theta_hist=theta_hist)
+            Z = self.step(Z, y, n_forecasts=n_forecasts, x_hist=X_hist, theta_hist=theta_hist, trans_dt=trans_dt, trans_fn=trans_fn, obs_fn=obs_fn)
         return torch.stack(X_hist), torch.stack(theta_hist)  # (T, N, n), (T, N, p)
 
     # ------------------------------------------------------------------

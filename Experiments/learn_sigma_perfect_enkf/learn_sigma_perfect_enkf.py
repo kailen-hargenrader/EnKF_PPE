@@ -1,0 +1,442 @@
+"""
+Experiment: Learn Sigma Parameter with Perfect Observations using State Augmented EnKF
+
+This experiment is the ensemble Kalman filter equivalent of learn_sigma_perfect.
+It tests the State Augmented EnKF's ability to learn the sigma parameter of Lorentz63
+from noise-free observations using an ensemble of particles.
+
+The EnKF approach:
+- Treats parameters as part of the augmented state: z = [x; θ]
+- Uses sequential Bayesian estimation with forecast and analysis steps
+- Learns parameters through cross-correlations in the forecast covariance
+- Requires an ensemble of initial guesses (unlike NeuralODE's single member)
+
+Goal: Compare parameter learning between:
+- NeuralODE (batch gradient-based optimization)
+- State Augmented EnKF (sequential ensemble-based estimation)
+
+Configuration is loaded from config.yaml using Hydra.
+"""
+
+import torch
+import torch.nn as nn
+from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
+from typing import Dict, Tuple
+from omegaconf import DictConfig
+import hydra
+
+from enkf_ppe.Dynamics.Lorentz63 import Lorentz63, Lorenz63derivs
+from enkf_ppe.Models.ENKF.state_aug_enkf import StateAugEnKF
+from enkf_ppe.Utils.observation_fns import FullObservation
+from enkf_ppe.Utils.covariances import ScaledIdentity
+
+
+def load_data(config: DictConfig) -> torch.Tensor:
+    """
+    Load the Lorentz63 dataset.
+    
+    Args:
+        config: Experiment configuration (DictConfig)
+        
+    Returns:
+        observations: (T, 3) tensor of observations
+    """
+    data_dir = Path(__file__).parent.parent.parent / "Data" / "Lorentz63"
+    data_path = data_dir / config.data.file
+    
+    if not data_path.exists():
+        raise FileNotFoundError(
+            f"Data file not found at {data_path}\n"
+            f"Please generate it with: python Data/Lorentz63/generate_data.py"
+        )
+    
+    payload = torch.load(data_path, weights_only=True)
+    data = payload['data']
+    
+    # Use first n_obs time steps
+    observations = data[:int(config.data.n_obs)]
+    
+    print(f"Loaded data shape: {observations.shape}")
+    print(f"Data file: {data_path}")
+    
+    return observations
+
+
+def create_dynamics_wrapper(config: DictConfig) -> Tuple[nn.Module, nn.Module]:
+    """
+    Create the dynamics and observation functions.
+    
+    The dynamics function is the TRUE Lorentz63 system (not learned).
+    This tests whether EnKF can recover parameters when the model is correct.
+    
+    Args:
+        config: Experiment configuration
+        
+    Returns:
+        trans_fn: transition function (X, theta) -> dX/dt
+        obs_fn: observation function X -> Y
+    """
+    # Dynamics: true Lorentz63 system (provides derivatives)
+    dynamics = Lorenz63derivs()
+    
+    # Observation: full state observation (identity function)
+    obs_fn = FullObservation()
+    
+    return dynamics, obs_fn
+
+
+def run_experiment(config: DictConfig) -> Dict:
+    """
+    Run the learn_sigma_perfect_enkf experiment.
+    
+    Args:
+        config: Experiment configuration (DictConfig)
+        
+    Returns:
+        results: Dictionary containing:
+            - X_hist: state trajectory history (T, N, 3)
+            - theta_hist: parameter history (T, N, 3)
+            - true_params: true parameters
+            - initial_params_mean: mean of initial parameter ensemble
+            - observations: observation data
+    """
+    # Extract config values
+    true_params = torch.tensor([[
+        config.parameters.truth.sigma,
+        config.parameters.truth.rho,
+        config.parameters.truth.beta
+    ]])
+    
+    initial_mean = torch.tensor([
+        config.parameters.initial_guess.sigma,
+        config.parameters.initial_guess.rho,
+        config.parameters.initial_guess.beta
+    ])
+    
+    x0_mean = torch.tensor([
+        config.initial_condition.x,
+        config.initial_condition.y,
+        config.initial_condition.z
+    ])
+    
+    ensemble_size = int(config.enkf.ensemble_size)
+    dt_model = config.data.dt_model
+    dt_obs = config.data.dt_obs
+    process_noise_std = config.enkf.process_noise_std
+    param_noise_std = config.enkf.param_noise_std
+    obs_noise_std = config.enkf.obs_noise_std + 1e-6
+    
+    print("\n" + "="*70)
+    print("EXPERIMENT: Learn Sigma Parameter using State Augmented EnKF")
+    print("="*70)
+    
+    # Load data
+    print("\n[1/4] Loading data...")
+    observations = load_data(config)
+    
+    # Create dynamics and observation functions
+    print("[2/4] Setting up dynamics...")
+    trans_fn, obs_fn = create_dynamics_wrapper(config)
+    
+    # Create ensemble of initial conditions
+    print(f"[3/4] Setting up State Augmented EnKF (ensemble size: {ensemble_size})...")
+    
+    # Initial state ensemble: small perturbation around the true initial state
+    X0_ensemble = x0_mean.unsqueeze(0).repeat(ensemble_size, 1)
+    X0_ensemble = X0_ensemble + torch.randn_like(X0_ensemble) * 0.01
+    
+    # Initial parameter ensemble: spread around the wrong initial guess
+    theta0_ensemble = initial_mean.unsqueeze(0).repeat(ensemble_size, 1)
+    theta0_ensemble = theta0_ensemble + torch.randn_like(theta0_ensemble) * (
+        torch.tensor([0.5, 0.1, 0.1])  # Different spreads for each parameter
+    )
+    
+    # Create covariance matrices for EnKF
+    process_noise_cov = ScaledIdentity(dim=3, std=process_noise_std, track_grads=False)
+    param_noise_cov = ScaledIdentity(dim=3, std=param_noise_std, track_grads=False)
+    obs_noise_cov = ScaledIdentity(dim=3, std=obs_noise_std, track_grads=False)
+    
+    # Create EnKF model
+    model = StateAugEnKF(
+        process_noise_cov=process_noise_cov,
+        param_noise_cov=param_noise_cov,
+        obs_noise_cov=obs_noise_cov,
+    )
+    
+    # Run the filter
+    print("[4/4] Running State Augmented EnKF...")
+    print(f"  - Initial sigma (mean): {initial_mean[0].item():.4f}")
+    print(f"  - True sigma:           {true_params[0, 0].item():.4f}")
+    print(f"  - Process noise std:    {process_noise_std}")
+    print(f"  - Param noise std:      {param_noise_std}")
+    print(f"  - Obs noise std:        {obs_noise_std}")
+    
+    X_hist, theta_hist = model.run(
+        X0=X0_ensemble,
+        theta0=theta0_ensemble,
+        observations=observations,
+        trans_dt=dt_model,
+        obs_dt=dt_obs,
+        trans_fn=trans_fn,
+        obs_fn=obs_fn,
+    )
+    
+    # Compute final metrics
+    final_sigma_mean = theta_hist[-1, :, 0].mean().item()
+    true_sigma = true_params[0, 0].item()
+    sigma_error = abs(final_sigma_mean - true_sigma)
+    sigma_relative_error = sigma_error / true_sigma * 100
+    
+    print("\n" + "="*70)
+    print("RESULTS")
+    print("="*70)
+    print(f"Final sigma (ensemble mean): {final_sigma_mean:.6f}")
+    print(f"True sigma:                  {true_sigma:.6f}")
+    print(f"Absolute error:              {sigma_error:.6f}")
+    print(f"Relative error:              {sigma_relative_error:.2f}%")
+    print(f"Ensemble std (final):        {theta_hist[-1, :, 0].std().item():.6f}")
+    
+    results = {
+        'X_hist': X_hist,
+        'theta_hist': theta_hist,
+        'true_params': true_params,
+        'initial_params_mean': initial_mean,
+        'observations': observations,
+        'config': config,
+    }
+    
+    return results
+
+
+def plot_results(results: Dict, output_dir: Path) -> None:
+    """
+    Create visualizations of the experiment results.
+    
+    Args:
+        results: Results dictionary from run_experiment
+        output_dir: Directory to save plots
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    X_hist = results['X_hist']
+    theta_hist = results['theta_hist']
+    observations = results['observations']
+    
+    T, N, n = X_hist.shape
+    
+    # Figure 1: Sigma parameter convergence (ensemble statistics)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    sigma_hist = theta_hist[:, :, 0].numpy()  # (T, N)
+    sigma_mean = sigma_hist.mean(axis=1)
+    sigma_std = sigma_hist.std(axis=1)
+    true_sigma = results['true_params'][0, 0].item()
+    initial_sigma = results['initial_params_mean'][0].item()
+    
+    time_axis = np.arange(len(sigma_mean))
+    
+    # Plot mean trajectory
+    ax.plot(time_axis, sigma_mean, 'b-', linewidth=2.5, label='Ensemble mean sigma')
+    
+    # Plot ensemble uncertainty band
+    ax.fill_between(time_axis, 
+                     sigma_mean - sigma_std, 
+                     sigma_mean + sigma_std, 
+                     alpha=0.3, color='blue', label='Ensemble ±1 std')
+    
+    # Plot true and initial values
+    ax.axhline(true_sigma, color='r', linestyle='--', linewidth=2, label='True sigma')
+    ax.scatter([0], [initial_sigma], color='g', s=100, marker='o', 
+               label='Initial guess (mean)', zorder=5, edgecolors='darkgreen', linewidth=2)
+    
+    ax.set_xlabel('Time (observations)', fontsize=12)
+    ax.set_ylabel('Sigma value', fontsize=12)
+    ax.set_title('Sigma Parameter Convergence - State Augmented EnKF', 
+                 fontsize=14, fontweight='bold')
+    ax.legend(fontsize=11)
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'sigma_convergence.png', dpi=150)
+    plt.close()
+    
+    # Figure 2: Final trajectory vs observations
+    fig, axes = plt.subplots(3, 1, figsize=(12, 8))
+    
+    # Compute ensemble mean trajectory over all time steps
+    final_traj_mean = X_hist.mean(dim=1).numpy()  # (T, 3) - mean over ensemble
+    obs_np = observations.numpy()
+    
+    for i, (ax, name) in enumerate(zip(axes, ['x', 'y', 'z'])):
+        ax.plot(obs_np[:, i], 'r-', linewidth=1.5, alpha=0.7, label='Observations')
+        ax.plot(final_traj_mean[:, i], 'b--', linewidth=1.5, alpha=0.7, 
+                label='Ensemble mean prediction')
+        ax.set_ylabel(name.upper(), fontsize=11)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+    
+    axes[-1].set_xlabel('Time step', fontsize=12)
+    fig.suptitle('Final Ensemble Mean Fit vs Observations', fontsize=14, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'trajectory_fit.png', dpi=150)
+    plt.close()
+    
+    # Figure 3: Parameter history for all ensemble members
+    fig, axes = plt.subplots(3, 1, figsize=(10, 8))
+    param_names = ['sigma', 'rho', 'beta']
+    
+    for i, (ax, name) in enumerate(zip(axes, param_names)):
+        param_hist = theta_hist[:, :, i].numpy()  # (T, N)
+        true_val = results['true_params'][0, i].item()
+        initial_val = results['initial_params_mean'][i].item()
+        
+        # Plot individual ensemble members (light)
+        for j in range(N):
+            ax.plot(param_hist[:, j], alpha=0.2, color='blue', linewidth=0.8)
+        
+        # Plot ensemble mean
+        param_mean = param_hist.mean(axis=1)
+        ax.plot(param_mean, 'b-', linewidth=2.5, label='Ensemble mean')
+        
+        # Plot true value
+        ax.axhline(true_val, color='r', linestyle='--', linewidth=2, label='True')
+        ax.axhline(initial_val, color='g', linestyle=':', linewidth=2, label='Initial guess (mean)')
+        
+        ax.set_ylabel(name, fontsize=11)
+        ax.legend(fontsize=10, loc='best')
+        ax.grid(True, alpha=0.3)
+    
+    axes[-1].set_xlabel('Time (observations)', fontsize=12)
+    fig.suptitle('Parameter Evolution - All Ensemble Members', fontsize=14, fontweight='bold')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'parameter_evolution.png', dpi=150)
+    plt.close()
+    
+    print(f"\nPlots saved to: {output_dir}")
+
+
+def plot_trajectory_comparison(results: Dict, output_dir: Path) -> None:
+    """
+    Plot trajectories for true sigma, initial sigma (mean), and final sigma (mean).
+    
+    Args:
+        results: Results dictionary from run_experiment
+        output_dir: Directory to save plot
+    """
+    from enkf_ppe.Dynamics.Lorentz63 import Lorentz63
+    
+    observations = results['observations']
+    true_params = results['true_params']
+    initial_params_mean = results['initial_params_mean']
+    theta_hist = results['theta_hist']
+    
+    final_sigma = theta_hist[-1, :, 0].mean().item()
+    initial_sigma = initial_params_mean[0].item()
+    true_sigma = true_params[0, 0].item()
+    
+    # Get other parameters (rho, beta) from true params
+    rho = true_params[0, 1].item()
+    beta = true_params[0, 2].item()
+    
+    # Get initial state from observations
+    x0 = observations[0:1]
+    dt_obs = results['config'].data.dt_obs
+    dt_model = results['config'].data.dt_model
+    
+    # Initialize RK4 dynamics
+    dynamics_rk4 = Lorentz63()
+    
+    # Generate trajectories for each sigma value
+    trajectories = {}
+    for label, sigma_val in [('true', true_sigma), 
+                              ('initial', initial_sigma), 
+                              ('final', final_sigma)]:
+        traj = [x0.numpy()]
+        X = x0.clone()
+        params = torch.tensor([[sigma_val, rho, beta]])
+        
+        for _ in range(len(observations) - 1):
+            # Use RK4 integration with model time step
+            n_steps = int(round(dt_obs / dt_model))
+            for _ in range(n_steps):
+                X = dynamics_rk4(X, params, dt=dt_model)
+            traj.append(X.detach().numpy())
+        
+        trajectories[label] = torch.tensor(traj).squeeze()
+    
+    # Create comparison plot
+    fig, axes = plt.subplots(3, 1, figsize=(14, 10))
+    
+    obs_np = observations.numpy()
+    time_steps = range(len(observations))
+    
+    for i, (ax, name) in enumerate(zip(axes, ['x', 'y', 'z'])):
+        # Plot observations
+        ax.plot(time_steps, obs_np[:, i], 'k-', linewidth=2.5, 
+                label='Ground truth (σ=10.0)', alpha=0.8, zorder=4)
+        
+        # Plot trajectories
+        ax.plot(time_steps, trajectories['true'][:, i], 'r--', linewidth=2, 
+                label=f'True σ ({true_sigma:.4f})', alpha=0.7, zorder=3)
+        ax.plot(time_steps, trajectories['initial'][:, i], 'orange', 
+                linestyle=':', linewidth=2, label=f'Initial σ ({initial_sigma:.4f})', 
+                alpha=0.7, zorder=2)
+        ax.plot(time_steps, trajectories['final'][:, i], 'b--', linewidth=2, 
+                label=f'Final σ ({final_sigma:.4f})', alpha=0.7, zorder=3)
+        
+        ax.set_ylabel(f'{name.upper()}(t)', fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=10, loc='best')
+    
+    axes[-1].set_xlabel('Time step', fontsize=12, fontweight='bold')
+    fig.suptitle('Trajectory Comparison: Different Sigma Values (EnKF)', 
+                fontsize=14, fontweight='bold', y=1.00)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'trajectory_comparison.png', dpi=150, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Trajectory comparison plot saved to {output_dir / 'trajectory_comparison.png'}")
+
+
+@hydra.main(version_base=None, config_path=".", config_name="config")
+def main(config: DictConfig) -> None:
+    """Main entry point for the experiment."""
+    # Run experiment
+    results = run_experiment(config)
+    
+    # Save results to script directory (not Hydra's output dir)
+    output_dir = Path(__file__).parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Extract sigma estimates over time (ensemble mean)
+    sigma_hist_mean = results['theta_hist'][:, :, 0].mean(dim=1)
+    sigma_hist_std = results['theta_hist'][:, :, 0].std(dim=1)
+    
+    # Save PyTorch results
+    torch.save({
+        'X_hist': results['X_hist'],
+        'theta_hist': results['theta_hist'],
+        'sigma_hist_mean': sigma_hist_mean,
+        'sigma_hist_std': sigma_hist_std,
+        'true_params': results['true_params'],
+        'initial_params_mean': results['initial_params_mean'],
+    }, output_dir / 'results.pt')
+    
+    # Create plots
+    plot_results(results, output_dir)
+    
+    # Create trajectory comparison plot
+    plot_trajectory_comparison(results, output_dir)
+    
+    print("\n" + "="*70)
+    print("Experiment complete!")
+    print("="*70)
+
+
+if __name__ == "__main__":
+    main()

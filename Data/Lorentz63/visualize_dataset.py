@@ -76,7 +76,7 @@ def visualize_dataset(file_path):
     # Update layout
     title = "Lorenz '63 Trajectory"
     if metadata:
-        title += f" (sigma={metadata.get('sigma')}, rho={metadata.get('rho')}, beta={metadata.get('beta')}, dt={metadata.get('dt')})"
+        title += f" (sigma={metadata['parameters'].get('sigma')}, rho={metadata['parameters'].get('rho')}, beta={metadata['parameters'].get('beta')}, dt={metadata['dt']})"
     
     fig.update_layout(
         title=title,
@@ -96,7 +96,9 @@ def visualize_dataset(file_path):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualize a Lorenz '63 dataset in 3D using Plotly.")
-    parser.add_argument("--file", type=str, default="sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt", help="Path to the .pt file.")
+    parser.add_argument("--file", type=str, default="sigma4.5000_rho28.0000_beta2.6667_dt0.1000.pt", help="Path to the .pt file.")
     
     args = parser.parse_args()
+
+    args.file = Path(__file__).parent / Path(args.file)
     visualize_dataset(args.file)

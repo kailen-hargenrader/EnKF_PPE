@@ -1,0 +1,51 @@
+# Hydra configuration
+hydra:
+  run:
+    dir: .
+  job:
+    chdir: false
+
+# Configuration for learn_sigma_perfect experiment
+# Learn the sigma parameter of Lorentz63 from perfect (noise-free) observations
+
+experiment:
+  name: learn_sigma_perfect
+  description: "Learn sigma parameter with perfect observations and true dynamics"
+
+data:
+  file: "sigma10.0000_rho28.0000_beta2.6667_dt0.1000.pt"
+  dt_model: 0.1      # Model time step
+  dt_obs: 0.1         # Observation time step
+  n_obs: 500          # Number of observations
+  noise_std: 0.0      # No sensor noise
+
+parameters:
+  truth:
+    sigma: 10.0
+    rho: 28.0
+    beta: 2.6667
+  
+  initial_guess:
+    sigma: 5.0        # Very wrong initial guess
+    rho: 28.0         # Correct
+    beta: 2.6667      # Correct
+  
+  learn_mask:
+    sigma: true       # Learn sigma
+    rho: false        # Fix rho
+    beta: false       # Fix beta
+
+neural_ode:
+  epochs: 5
+  learning_rate: 0.1
+  max_grad_norm: 1.0
+  batch_size: 1       # No ensemble for Neural ODE
+
+initial_condition:
+  x: 1.0
+  y: 1.0
+  z: 1.0
+
+defaults:
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none

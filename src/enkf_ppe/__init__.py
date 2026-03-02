@@ -3,6 +3,7 @@ from enkf_ppe.Utils import (
     Covariance, ScaledIdentity,
     ObservationFn, FullObservation, MaskedObservation,
     Initialisation, GaussianInit, CovarianceInit, DeterministicInit,
+    RK4,
 )
 from enkf_ppe import Dynamics
 
@@ -22,6 +23,7 @@ __all__ = [
     "GaussianInit",
     "CovarianceInit",
     "DeterministicInit",
+    "RK4",
     # Subpackages
     "Dynamics",
 ]

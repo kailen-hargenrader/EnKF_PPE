@@ -1,0 +1,42 @@
+# Hydra configuration
+hydra:
+  run:
+    dir: .
+  job:
+    chdir: false
+
+# Configuration for learn_sigma_perfect_enkf experiment
+# Learn the sigma parameter of Lorentz63 using State Augmented EnKF
+
+experiment:
+  name: learn_sigma_perfect_enkf
+  description: "Learn sigma parameter with State Augmented EnKF using perfect observations"
+
+data:
+  file: "sigma10.0000_rho28.0000_beta2.6667_dt0.1000.pt"
+  dt_model: 0.1      # Model time step
+  dt_obs: 0.1         # Observation time step
+  n_obs: 500          # Number of observations
+  noise_std: 0.0      # No sensor noise
+
+parameters:
+  truth:
+    sigma: 10.0
+    rho: 28.0
+    beta: 2.6667
+  
+  initial_guess:
+    sigma: 5.0        # Very wrong initial guess
+    rho: 28.0         # Correct
+    beta: 2.6667      # Correct
+
+enkf:
+  ensemble_size: 50                    # Number of ensemble members
+  process_noise_std: 0.01              # Process noise σ (system dynamics uncertainty)
+  param_noise_std: 0.1                 # Parameter noise σ (artificial ensemble spread for parameters)
+  obs_noise_std: 0.0                   # Observation noise σ (perfect observations, no noise)
+
+initial_condition:
+  x: 1.0
+  y: 1.0
+  z: 1.0

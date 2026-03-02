@@ -1,0 +1,75 @@
+
+ANALYSIS: Why RK4 Implementations Might Disagree
+=================================================
+
+1. SIGNATURE DIFFERENCE
+   Custom RK4 (Lorentz63._rk4_step):
+      - Signature: forward(X, Theta, dt=0.01)
+      - Dynamics call: dynamics(X, Theta) -> dX/dt
+      - Takes X as [..., n], Theta as [..., 3]
+   
+   torchdiffeq.odeint (RK4 method):
+      - Signature: odeint(odefunc, y0, t, method='rk4', ...)
+      - odefunc signature: f(t, y) -> dy/dt  [IMPORTANT: includes time t!]
+      - Time-dependent dynamics (even if not used)
+
+2. TIME PARAMETER HANDLING
+   The key difference is that torchdiffeq requires the ODE function to accept 
+   time as the first argument: f(t, y). Our Lorenz63 doesn't use time explicitly,
+   but this can cause subtle issues:
+   
+   - The OdeWrapper must match the signature exactly
+   - torchdiffeq may use adaptive step sizes with options parameter
+   - Our custom RK4 uses fixed step sizes exclusively
+
+3. STEP SIZE BEHAVIOR
+   Custom RK4:
+      - Fixed step size: always uses the provided dt value
+      - Deterministic: same result every time
+   
+   torchdiffeq RK4:
+      - Can use adaptive stepping by default
+      - Our code specifies method='rk4' (standard RK4, not adaptive)
+      - But torchdiffeq may apply small corrections or different tolerances
+
+4. DIMENSION HANDLING
+   torchdiffeq expects:
+      - Input shape: (n,) or (batch, n)
+      - Output shape: (T, n) or (T, batch, n)
+   
+   Our wrapper must properly squeeze/unsqueeze dimensions to match.
+   Any mismatch here causes broadcasting errors or incorrect computations.
+
+5. NUMERICAL DIFFERENCES
+   Even with identical algorithms, numerical precision can differ due to:
+      - Different order of operations (floating-point associativity)
+      - Compiler optimizations
+      - PyTorch backend differences (CPU vs GPU)
+
+6. INTEGRATION TIME GRID
+   - Custom RK4: takes fixed steps of size dt, implicit time grid
+   - torchdiffeq: requires explicit time grid as input (t_eval)
+   - If t_eval doesn't align with desired dt, solver may take different steps
+
+RECOMMENDATIONS FOR INVESTIGATION
+==================================
+
+Step 1: Check step-by-step agreement
+   Compare one RK4 step from each method. If they disagree on a single step,
+   the issue is in the algorithm or dimension handling.
+
+Step 2: Verify dimension shapes
+   Add assertions to confirm:
+      - x has shape (1, 3) when passed to odeint
+      - Output has expected shape (T, 3)
+      - No unexpected broadcasting
+
+Step 3: Test time grid sensitivity
+   Try different explicit time grids in torchdiffeq to see if the step size matters.
+
+Step 4: Check for time-dependency
+   Verify Lorenz63 equations don't have implicit time dependence hidden somewhere.
+
+Step 5: Compare accumulated error
+   If single steps agree but trajectories diverge, it's likely floating-point 
+   accumulation. Very small differences compound in chaotic systems like Lorenz!

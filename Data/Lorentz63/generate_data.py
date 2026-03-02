@@ -2,7 +2,7 @@ import torch
 import os
 import argparse
 from pathlib import Path
-from enkf_ppe.Dynamics.Lorentz63 import forward
+from enkf_ppe.Dynamics.Lorentz63 import Lorentz63
 
 
 def generate_dataset(num_steps, dt=0.01, sigma=10.0, rho=28.0, beta=8/3, initial_state=None):
@@ -70,8 +70,9 @@ def generate_dataset(num_steps, dt=0.01, sigma=10.0, rho=28.0, beta=8/3, initial
     
     theta = torch.tensor([sigma, rho, beta], dtype=torch.float32)
 
+    dynamics = Lorentz63()
     for _ in range(remaining_steps):
-        current_state = forward(current_state, theta, dt=dt)
+        current_state = dynamics(current_state, theta, dt=dt)
         new_points.append(current_state.clone())
     
     # 4. Concatenate and save
@@ -95,9 +96,9 @@ def generate_dataset(num_steps, dt=0.01, sigma=10.0, rho=28.0, beta=8/3, initial
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate or extend a Lorenz '63 dataset.")
-    parser.add_argument("--steps", type=int, default=10000, help="Number of integration steps to generate.")
-    parser.add_argument("--dt", type=float, default=0.01, help="Time step size.")
-    parser.add_argument("--sigma", type=float, default=10.0, help="Lorenz parameter sigma.")
+    parser.add_argument("--steps", type=int, default=500, help="Number of integration steps to generate.")
+    parser.add_argument("--dt", type=float, default=0.1, help="Time step size.")
+    parser.add_argument("--sigma", type=float, default=4.5, help="Lorenz parameter sigma.")
     parser.add_argument("--rho", type=float, default=28.0, help="Lorenz parameter rho.")
     parser.add_argument("--beta", type=float, default=8/3, help="Lorenz parameter beta.")
     parser.add_argument("--x0", type=float, nargs=3, default=[1.0, 1.0, 1.0], help="Initial state [x, y, z] if starting fresh.")

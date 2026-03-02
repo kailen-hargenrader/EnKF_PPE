@@ -94,11 +94,26 @@ class CovarianceInit(Initialisation):
 
 class DeterministicInit(Initialisation):
     """
-    Deterministic initialisation: all N members equal to center (zero spread).
+    Deterministic initialisation: all N members equal to truth.
 
     Useful as a baseline or when the filter is expected to develop ensemble
     spread purely from its process-noise model.
     """
+    def __init__(self, offset: list[float]) -> None:
+        super().__init__()
+        self.offset = offset
 
     def forward(self, center: Tensor, N: int) -> Tensor:
         return center.reshape(1, -1).expand(N, -1).clone()             # (N, dim)
+
+class PresetDeterministicInit(Initialisation):
+    """
+    Preset deterministic initialisation: all N members equal to preset.
+    """
+    def __init__(self, preset: list[float]) -> None:
+        super().__init__()
+        self.preset = preset
+
+    def forward(self, center: Tensor, N: int) -> Tensor:
+        #Ignores center
+        return self.preset.reshape(1, -1).expand(N, -1).clone()             # (N, dim)

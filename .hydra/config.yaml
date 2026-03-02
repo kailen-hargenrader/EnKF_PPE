@@ -1,0 +1,28 @@
+experiment:
+  name: learn_sigma_rho_beta_noisy_enkf
+  description: Learn sigma, rho, and beta parameters with State Augmented EnKF using
+    noisy observations
+data:
+  file: sigma10.0000_rho28.0000_beta2.6667_dt0.1000.pt
+  dt_model: 0.1
+  dt_obs: 0.1
+  n_obs: 500
+  noise_std: 5.0
+parameters:
+  truth:
+    sigma: 10.0
+    rho: 28.0
+    beta: 2.6667
+  initial_guess:
+    sigma: 1.0
+    rho: 1.0
+    beta: 1.0
+enkf:
+  ensemble_size: 100
+  process_noise_std: 0.01
+  param_noise_std: 0.25
+  obs_noise_std: 5.0
+initial_condition:
+  x: 1.0
+  'y': 1.0
+  z: 1.0
