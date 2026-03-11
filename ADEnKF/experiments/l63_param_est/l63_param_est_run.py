@@ -6,12 +6,24 @@ data_path, seed, N_ens, true params, and obs settings can be used to compare
 the auto-differentiable EnKF (torchEnKF) with the standard state-augmented EnKF.
 
 Run from repo root (EnKF_PPE_clone) with:
-  PYTHONPATH=.:torchEnKF python torchEnKF/experiments/l63_param_est/l63_param_est_run.py
 
-Override config:
-  python torchEnKF/experiments/l63_param_est/l63_param_est_run.py seed=0 N_ens=100
-  python torchEnKF/experiments/l63_param_est/l63_param_est_run.py data_path=null
+  PYTHONPATH=.:ADEnKF python ADEnKF/experiments/l63_param_est/l63_param_est_run.py
+
+Override config, e.g.:
+
+  python ADEnKF/experiments/l63_param_est/l63_param_est_run.py seed=0 N_ens=100
+  python ADEnKF/experiments/l63_param_est/l63_param_est_run.py data_path=null
 """
+
+from pathlib import Path
+import sys
+
+# Repo root = EnKF_PPE_clone; ensure we can import `paths`, `examples`, and `torchEnKF`
+_script_dir = Path(__file__).resolve().parent          # ADEnKF/experiments/l63_param_est
+_ad_enkf_dir = _script_dir.parent.parent              # ADEnKF
+_repo_root = _ad_enkf_dir.parent                      # repo root
+sys.path.insert(0, str(_repo_root))
+sys.path.insert(0, str(_ad_enkf_dir))
 
 from examples import generate_data
 from torchEnKF import da_methods, nn_templates, noise
@@ -22,17 +34,7 @@ from omegaconf import DictConfig, OmegaConf
 import hydra
 import numpy as np
 import torch
-from pathlib import Path
-import sys
 import random
-
-# Repo root = EnKF_PPE_clone; ensure we can import paths and torchEnKF
-_script_dir = Path(__file__).resolve().parent
-_torch_enkf_dir = _script_dir.parent.parent
-_repo_root = _torch_enkf_dir.parent
-sys.path.insert(0, str(_repo_root))
-sys.path.insert(0, str(_torch_enkf_dir))
-
 
 def _setup_device():
     return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")

@@ -30,12 +30,12 @@ dt: 0.01
 
 # Data: same file as enkf_butterfly so we use the same truth trajectory
 # Set to null to generate in-memory with true_params + warmup instead
-data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.7000_dt0.0100.pt
+data_path: Lorentz63/sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt
 
 # Observation setup
 # n_forecasts: model steps between observations → obs_dt = n_forecasts * dt
 n_forecasts: 5
-n_obs: 400
+n_obs: 200
 obs_std: 1.0
 
 # Process noise (Q) — separate from observation noise; match EnKF process_noise_cov.std for comparison
