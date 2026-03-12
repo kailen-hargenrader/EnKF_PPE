@@ -1,7 +1,7 @@
 seed: 42
 
 # Ensemble size
-N_ens: 300
+N_ens: 50
 
 # Problem dimensions
 x_dim: 5     # number of species
@@ -12,8 +12,12 @@ p_dim: 18    # length of theta (r_i and non-zero A_ij entries)
 data_truth_path: gLV/data/glv_ahidden0p00_truth.npz
 data_obs_path:   gLV/data/glv_ahidden0p00_obs.npz
 
+# Observation setup (analogue of L63 config)
+# n_obs: max number of observation times to use from the gLV dataset
+n_obs: 200
+
 # Initial parameter guess: scaled version of truth (do not use 0: zero params → degenerate dynamics and NaN)
-init_theta_scale: 0.8
+init_theta_scale: 0.5
 
 # Process noise (Q): initial per-dimension std for learned model noise
 process_std: 0.01
@@ -30,6 +34,7 @@ lr: 0.05
 clip_grad_norm: 1.0
 lr_lambda_epoch_start: 40
 lr_lambda_exponent: -0.5
+filter_mode: ad
 
 # ODE solver
 dt: 0.5          # fallback if t-grid has only one point (normally unused)
@@ -46,5 +51,5 @@ hydra:
   job:
     chdir: false
   run:
-    dir: ADEnKF/experiments/glv_param_est/runs/glv_param_est_torch_full_obs
+    dir: ???
 

@@ -36,6 +36,9 @@ import numpy as np
 import torch
 import random
 
+from methods.em_enkf import EnKF_EM
+from fractions import Fraction
+
 def _setup_device():
     return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -180,6 +183,7 @@ def run(cfg: DictConfig) -> None:
     )
 
     monitor = []
+    filter_mode = str(cfg.get("filter_mode", "ad")).lower()  # "ad" (AD-EnKF) or "em" (EM-EnKF)
     for epoch in tqdm(range(cfg.epochs), desc="Training", leave=False):
         train_log_likelihood = torch.zeros(train_size, device=device)
         t_start = t0
@@ -188,27 +192,49 @@ def run(cfg: DictConfig) -> None:
         for start in range(0, n_obs, L):
             optimizer.zero_grad()
             end = min(start + L, n_obs)
-            X, _, log_likelihood = da_methods.EnKF(
-                learned_ode_func,
-                true_obs_func,
-                t_obs[start:end],
-                y_obs[start:end],
-                N_ensem,
-                init_m,
-                init_C_param,
-                learned_model_Q,
-                noise_R_true,
-                device,
-                save_filter_step={},
-                t0=t_start,
-                init_X=X,
-                ode_method=cfg.ode_method,
-                ode_options=dict(step_size=cfg.ode_step_size),
-                adjoint=True,
-                adjoint_method=cfg.adjoint_method,
-                adjoint_options=dict(step_size=cfg.adjoint_step_size),
-                tqdm=None,
-            )
+            if filter_mode == "ad":
+                # AD-EnKF: full adjoint backprop through EnKF
+                X, _, log_likelihood = da_methods.EnKF(
+                    learned_ode_func,
+                    true_obs_func,
+                    t_obs[start:end],
+                    y_obs[start:end],
+                    N_ensem,
+                    init_m,
+                    init_C_param,
+                    learned_model_Q,
+                    noise_R_true,
+                    device,
+                    save_filter_step={},
+                    t0=t_start,
+                    init_X=X,
+                    ode_method=cfg.ode_method,
+                    ode_options=dict(step_size=cfg.ode_step_size),
+                    adjoint=True,
+                    adjoint_method=cfg.adjoint_method,
+                    adjoint_options=dict(step_size=cfg.adjoint_step_size),
+                    tqdm=None,
+                )
+            else:
+                # EM-EnKF: particles detached after each analysis step (Term A only)
+                X, _, log_likelihood = EnKF_EM(
+                    learned_ode_func,
+                    true_obs_func,
+                    t_obs[start:end],
+                    y_obs[start:end],
+                    N_ensem,
+                    init_m,
+                    init_C_param,
+                    learned_model_Q,
+                    noise_R_true,
+                    device,
+                    init_X=X,
+                    ode_method=cfg.ode_method,
+                    ode_options=dict(step_size=cfg.ode_step_size),
+                    t0=float(t_start),
+                    compute_likelihood=True,
+                    tqdm=None,
+                )
             t_start = t_obs[end - 1]
             (-log_likelihood).mean().backward()
             train_log_likelihood += log_likelihood.detach().clone()
@@ -232,8 +258,9 @@ def run(cfg: DictConfig) -> None:
 
     # Shape: (n_epochs, 5) with columns [sigma, rho, beta, q_scale, log_likelihood]
     monitor = np.asarray(monitor)
-    true_vals = [cfg.true_params.sigma,
-                 cfg.true_params.rho, cfg.true_params.beta]
+    true_vals = [to_float(cfg.true_params.sigma),
+                 to_float(cfg.true_params.rho), 
+                 to_float(cfg.true_params.beta)]
     param_names = ["sigma", "rho", "beta"]
 
     import matplotlib
@@ -335,6 +362,122 @@ def run(cfg: DictConfig) -> None:
     torch.save(est_dataset, est_path)
     print(f"Estimated trajectory dataset saved to {est_path}")
 
+    # ------------------------------------------------------------------
+    # Laplace approximation for EnKF-based posterior over (sigma, rho, beta)
+    # (files are named according to filter_mode: AD-EnKF vs EM-EnKF)
+    # ------------------------------------------------------------------
+    from torch.autograd.functional import hessian
+
+    # Final parameter estimate (3,)
+    theta_star = learned_ode_func.coeff.detach().clone()
+    p_dim = theta_star.numel()
+    laplace_prefix = "ad_enkf" if filter_mode == "ad" else "em_enkf"
+    
+    _hessian_seed = cfg.seed + 9999
+    
+    class _L63Direct(torch.nn.Module):
+        """Lorenz-63 ODE that holds coeff as a plain tensor (not nn.Parameter)
+        so that torch_hessian's tracked theta_flat stays in the graph."""
+        def __init__(self, coeff_tensor: torch.Tensor):
+            super().__init__()
+            self._coeff = coeff_tensor  # NOT nn.Parameter — preserves graph
+
+        def forward(self, t, u):
+            sigma, rho, beta = self._coeff
+            return torch.stack((
+                sigma * (u[..., 1] - u[..., 0]),
+                u[..., 0] * (rho - u[..., 2]) - u[..., 1],
+                u[..., 0] * u[..., 1] - beta * u[..., 2],
+            ), dim=-1)
+
+
+    def enkf_neg_log_likelihood(theta_flat: torch.Tensor) -> torch.Tensor:
+        torch.manual_seed(_hessian_seed)
+        theta_flat = theta_flat.to(device)
+
+        ode_func_h = _L63Direct(theta_flat)   # <-- no nn.Parameter wrapping
+        q_scale_h = float(cfg.get("process_std", cfg.get("init_Q_diag_scale", 0.05)))
+        model_Q_h = noise.AddGaussian(
+            x_dim, q_scale_h * torch.ones(x_dim, device=device), "diag"
+        ).to(device)
+
+        X_h = init_C_param(init_m.expand(train_size, N_ensem, x_dim))
+        t_start_h = t0
+        log_lik_h = torch.zeros(train_size, device=device)
+
+        for start in range(0, n_obs, L):
+            end = min(start + L, n_obs)
+            X_h, _, ll = da_methods.EnKF(
+                ode_func_h, true_obs_func,
+                t_obs[start:end], y_obs[start:end],
+                N_ensem, init_m, init_C_param, model_Q_h, noise_R_true, device,
+                save_filter_step={}, t0=t_start_h, init_X=X_h,
+                ode_method=cfg.ode_method,
+                ode_options=dict(step_size=cfg.ode_step_size),
+                adjoint=False,
+                tqdm=None,
+            )
+            t_start_h = t_obs[end - 1]
+            log_lik_h = log_lik_h + ll
+
+        return -(log_lik_h.mean())
+
+    try:
+        H_raw = hessian(enkf_neg_log_likelihood, theta_star)  # (p, p)
+        H_raw = H_raw.detach()
+
+        # 1. Symmetrize — eliminates floating-point asymmetry from the two
+        #    graph traversals used internally by torch_hessian.
+        H_sym = (H_raw + H_raw.T) / 2.0
+
+        # 2. Nearest positive-definite projection via eigenvalue clipping.
+        #    We expect H to be PD at the MLE but the stochastic EnKF estimate
+        #    will have some small negative eigenvalues from finite-ensemble noise.
+        #    Clipping to a small floor (1e-4) is the standard Laplace fix and is
+        #    equivalent to adding a weak prior that limits posterior variance
+        #    in poorly-identified directions.
+        eigvals, eigvecs = torch.linalg.eigh(H_sym)   # eigh guarantees real output
+        min_eig = eigvals.min().item()
+        max_eig = eigvals.max().item()
+        print(f"Hessian eigenvalues — min: {min_eig:.3e}, max: {max_eig:.3e}")
+
+        CLIP_FLOOR = 1e-4   # governs max posterior std in unidentified directions
+        n_clipped = int((eigvals < CLIP_FLOOR).sum().item())
+        if n_clipped > 0:
+            print(
+                f"Note: {n_clipped}/{p_dim} eigenvalue(s) clipped to {CLIP_FLOOR}. "
+                "This is normal for a stochastic EnKF Hessian — not a failure."
+            )
+        eigvals_pd = eigvals.clamp(min=CLIP_FLOOR)
+        H_pd = eigvecs @ torch.diag(eigvals_pd) @ eigvecs.T
+
+        # 3. Posterior covariance and samples
+        Sigma_post = torch.linalg.inv(H_pd)                    # (p, p)
+        std_post = torch.sqrt(torch.diag(Sigma_post)).detach().cpu().numpy()
+
+        L_chol = torch.linalg.cholesky(Sigma_post)
+        z = torch.randn(p_dim, 1000, device=device)
+        theta_samples = (theta_star.to(device).unsqueeze(1) + L_chol @ z).T  # (1000, p)
+        theta_samples_np = theta_samples.detach().cpu().numpy()
+
+        np.save(run_dir / f"{laplace_prefix}_laplace_theta_posterior.npy", theta_samples_np)
+        np.save(run_dir / f"{laplace_prefix}_laplace_std.npy", std_post)
+
+        for name, mu, s in zip(["sigma", "rho", "beta"],
+                                theta_star.tolist(), std_post.tolist()):
+            print(f"  {name}: {mu:.4f} ± {s:.4f}  (2σ = [{mu-2*s:.4f}, {mu+2*s:.4f}])")
+
+        print(f"Saved L63 {laplace_prefix.upper().replace('_', '-')} Laplace posterior to run directory.")
+
+    except RuntimeError as exc:
+        print(f"Warning: Hessian computation failed: {exc}")
+
+def to_float(x):
+    if isinstance(x, str):
+        return float(Fraction(x))
+    return float(x)
 
 if __name__ == "__main__":
+    _SCRIPT_DIR = Path(__file__).resolve().parent
+    sys.argv.append(f"hydra.run.dir={_SCRIPT_DIR}/runs/AD_l63_param_est_torch")
     run()

@@ -43,7 +43,7 @@ import matplotlib.gridspec as gridspec
 
 from torchdiffeq import odeint
 from torchEnKF import da_methods, nn_templates, noise
-from torchEnKF.da_methods import inv_logdet
+from methods.em_enkf import EnKF_EM
 from paths import DATA_DIR
 
 torch.manual_seed(42)
@@ -56,19 +56,19 @@ device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"device: {device}")
 
 
-# ── shared system parameters ─────────────────────────────────────────────
-TRUE_SIGMA = 10.0
-TRUE_RHO   = 28.0
-TRUE_BETA  = 8 / 3
-x_dim      = 3
-N_ENS      = 80
-OBS_STD    = 1.0
-PROC_STD   = 0.5
+# ── shared system parameters (aligned with l63_param_est.yaml) ──────────
+TRUE_SIGMA = 10.0           # true_params.sigma
+TRUE_RHO   = 28.0           # true_params.rho
+TRUE_BETA  = 8 / 3          # true_params.beta
+x_dim      = 3              # x_dim
+N_ENS      = 50             # N_ens
+OBS_STD    = 1.0            # obs_std
+PROC_STD   = 0.5            # process_std
 
 # ODE integration settings — adjoint step must match forward step to avoid
 # discretization error corrupting the AD gradient in chaotic systems
 ODE_STEP     = 0.01
-ADJOINT_STEP = 0.01   # was 0.05 — mismatch caused biased AD gradients
+ADJOINT_STEP = 0.05   # was 0.05 — mismatch caused biased AD gradients
 
 H_true        = torch.eye(x_dim, device=device)
 true_obs_func = nn_templates.Linear(x_dim, x_dim, H=H_true).to(device)
@@ -84,7 +84,7 @@ model_Q = noise.AddGaussian(x_dim,
                              "diag").to(device)
 
 
-def load_observations(n_obs: int = 200, n_forecasts: int = 5, dt: float = 0.01):
+def load_observations(n_obs: int = 150, n_forecasts: int = 5, dt: float = 0.01):
     data_file = DATA_DIR / "Lorentz63/sigma10.0000_rho28.0000_beta2.6667_dt0.0100.pt"
     payload   = torch.load(data_file, weights_only=True)
     truth     = payload["data"]
@@ -112,8 +112,16 @@ def compute_gradient(coeff, y_obs, t_obs, mode, n_ens=None):
         # Official torchEnKF with adjoint backprop
         # adjoint step_size matches forward step_size to avoid gradient error
         _, _, log_lik = da_methods.EnKF(
-            learned, true_obs_func, t_obs, y_obs, n_ens,
-            init_m, init_C_param, model_Q, noise_R_true, device,
+            learned,
+            true_obs_func,
+            t_obs,
+            y_obs,
+            n_ens,
+            init_m,
+            init_C_param,
+            model_Q,
+            noise_R_true,
+            device,
             save_filter_step={},
             ode_method="rk4",
             ode_options=dict(step_size=ODE_STEP),
@@ -125,52 +133,25 @@ def compute_gradient(coeff, y_obs, t_obs, mode, n_ens=None):
         log_lik = log_lik.mean()
 
     else:
-        # EM loop: da_methods.EnKF internals + X.detach()
-        y_dim_  = y_obs.shape[-1]
-        n_obs_  = y_obs.shape[0]
-
-        noise_R_mat    = noise_R_true.full()
-        noise_R_inv    = noise_R_true.inv()
-        logdet_noise_R = noise_R_true.logdet()
-
-        X       = init_C_param(init_m.expand(*bs, n_ens, x_dim))
-        log_lik = torch.zeros(bs, device=device)
-        t_cur   = 0.0
-
-        for j in range(n_obs_):
-            n_steps = round(((t_obs[j] - t_cur) / ODE_STEP).item())
-            t_span  = torch.linspace(t_cur, t_obs[j].item(), n_steps + 1, device=device)
-            X       = odeint(learned, X, t_span,
-                             method='rk4', options=dict(step_size=ODE_STEP))[-1]
-            t_cur   = t_obs[j].item()
-            X       = model_Q(X)
-
-            X_m  = X.mean(dim=-2).unsqueeze(-2)
-            X_ct = X - X_m
-
-            H     = true_obs_func.H
-            HX    = X @ H.T
-            HX_m  = X_m @ H.T
-            HX_ct = HX - HX_m
-
-            y_obs_j     = y_obs[j].unsqueeze(-2)
-            obs_perturb = noise_R_true(y_obs_j.expand(*bs, n_ens, y_dim_))
-            C_ww_sq     = 1 / math.sqrt(n_ens - 1) * HX_ct
-
-            v = torch.cat([obs_perturb - HX, y_obs_j - HX_m], dim=-2)
-            C_ww_R_invv, C_ww_R_logdet = inv_logdet(
-                v, C_ww_sq, noise_R_mat, noise_R_inv, logdet_noise_R)
-
-            part1 = -0.5 * (y_dim_ * math.log(2 * math.pi) + C_ww_R_logdet)
-            part2 = -0.5 * (C_ww_R_invv[..., n_ens:, :]
-                            @ (y_obs_j - HX_m).transpose(-1, -2))
-            log_lik += (part1 + part2.squeeze(-1).squeeze(-1))
-
-            pre = C_ww_R_invv[..., :n_ens, :]
-            X   = X + (1 / math.sqrt(n_ens - 1)
-                       * (pre @ C_ww_sq.transpose(-1, -2)) @ X_ct)
-            X   = X.detach()   # severs Term B, leaving only Term A
-
+        # EM-EnKF: reuse standalone EM implementation
+        _, _, log_lik = EnKF_EM(
+            learned,
+            true_obs_func,
+            t_obs,
+            y_obs,
+            n_ens,
+            init_m,
+            init_C_param,
+            model_Q,
+            noise_R_true,
+            device,
+            init_X=None,
+            ode_method="rk4",
+            ode_options=dict(step_size=ODE_STEP),
+            t0=0.0,
+            compute_likelihood=True,
+            tqdm=None,
+        )
         log_lik = log_lik.mean()
 
     log_lik.backward()
@@ -181,7 +162,7 @@ def compute_gradient(coeff, y_obs, t_obs, mode, n_ens=None):
 # Panel 1 — Gradient landscape
 # ═══════════════════════════════════════════════════════════════════════════
 
-def panel1_gradient_landscape(ax, n_obs=80):
+def panel1_gradient_landscape(ax, n_obs=150):
     print("Panel 1: gradient landscape...")
     y_obs, t_obs, _ = load_observations(n_obs=n_obs)
 
@@ -218,7 +199,7 @@ def panel1_gradient_landscape(ax, n_obs=80):
 # lr=0.2, n_steps=60: both methods reach their fixed points within the window.
 # ═══════════════════════════════════════════════════════════════════════════
 
-def panel2_optimisation(ax, n_obs=80, n_steps=30, lr=0.2, n_ens=50):
+def panel2_optimisation(ax, n_obs=150, n_steps=30, lr=0.2, n_ens=50):
     print("Panel 2: optimization trajectories...")
     y_obs, t_obs, _ = load_observations(n_obs=n_obs)
 

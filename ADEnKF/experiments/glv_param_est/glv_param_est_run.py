@@ -45,6 +45,7 @@ from tqdm import tqdm
 
 from paths import DATA_DIR
 from torchEnKF import da_methods, nn_templates, noise
+from methods.em_enkf import EnKF_EM
 
 
 def _setup_device():
@@ -169,10 +170,17 @@ def _load_glv_data(cfg: DictConfig, device):
     H_np = obs_np["H"].astype(np.float32)  # (M, N)
     obs_noise_std = float(obs_np["obs_noise_std"])
 
-    # Time grid
+    # Time grid and observation truncation (n_obs hyperparameter)
+    n_obs_full = t.shape[0]
+    n_obs_cfg = int(getattr(cfg, "n_obs", n_obs_full))
+    n_obs = min(n_obs_cfg, n_obs_full)
+
+    t = t[:n_obs]
+    X = X[:, :n_obs]
+    Y = Y[:, :n_obs]
+
     dt = float(t[1] - t[0]) if t.shape[0] > 1 else float(cfg.dt)
     t_obs = torch.from_numpy(t).to(device)  # (n_obs,)
-    n_obs = t.shape[0]
 
     # Truth and observations as (n_obs, 1, dim)
     X_torch = torch.from_numpy(X.T).to(device)  # (T, N)
@@ -326,6 +334,7 @@ def run(cfg: DictConfig) -> None:
     )
 
     monitor = []  # each entry: [theta..., q_scale, log_likelihood]
+    filter_mode = str(cfg.get("filter_mode", "ad")).lower()  # "ad" or "em"
 
     for epoch in tqdm(range(cfg.epochs), desc="Training", leave=False):
         train_log_likelihood = torch.zeros(train_size, device=device)
@@ -335,27 +344,47 @@ def run(cfg: DictConfig) -> None:
         for start in range(0, n_obs, L):
             optimizer.zero_grad()
             end = min(start + L, n_obs)
-            X, _, log_likelihood = da_methods.EnKF(
-                learned_ode_func,
-                true_obs_func,
-                t_obs[start:end],
-                y_obs[start:end],
-                N_ensem,
-                init_m,
-                init_C_param,
-                learned_model_Q,
-                noise_R_true,
-                device,
-                save_filter_step={},
-                t0=t_start,
-                init_X=X,
-                ode_method=cfg.ode_method,
-                ode_options=dict(step_size=cfg.ode_step_size),
-                adjoint=True,
-                adjoint_method=cfg.adjoint_method,
-                adjoint_options=dict(step_size=cfg.adjoint_step_size),
-                tqdm=None,
-            )
+            if filter_mode == "ad":
+                X, _, log_likelihood = da_methods.EnKF(
+                    learned_ode_func,
+                    true_obs_func,
+                    t_obs[start:end],
+                    y_obs[start:end],
+                    N_ensem,
+                    init_m,
+                    init_C_param,
+                    learned_model_Q,
+                    noise_R_true,
+                    device,
+                    save_filter_step={},
+                    t0=t_start,
+                    init_X=X,
+                    ode_method=cfg.ode_method,
+                    ode_options=dict(step_size=cfg.ode_step_size),
+                    adjoint=True,
+                    adjoint_method=cfg.adjoint_method,
+                    adjoint_options=dict(step_size=cfg.adjoint_step_size),
+                    tqdm=None,
+                )
+            else:
+                X, _, log_likelihood = EnKF_EM(
+                    learned_ode_func,
+                    true_obs_func,
+                    t_obs[start:end],
+                    y_obs[start:end],
+                    N_ensem,
+                    init_m,
+                    init_C_param,
+                    learned_model_Q,
+                    noise_R_true,
+                    device,
+                    init_X=X,
+                    ode_method=cfg.ode_method,
+                    ode_options=dict(step_size=cfg.ode_step_size),
+                    t0=float(t_start),
+                    compute_likelihood=True,
+                    tqdm=None,
+                )
             t_start = t_obs[end - 1]
             (-log_likelihood).mean().backward()
             train_log_likelihood += log_likelihood.detach().clone()
@@ -606,7 +635,126 @@ def run(cfg: DictConfig) -> None:
     torch.save(est_dataset, est_path)
     print(f"Estimated gLV trajectory dataset saved to {est_path}")
 
+    # ----------------------------------------------------------------------
+    # Laplace approximation for EnKF-based posterior over gLV parameters
+    # (files are named according to filter_mode: AD-EnKF vs EM-EnKF)
+    # ----------------------------------------------------------------------
+    from torch.autograd.functional import hessian
+
+    theta_star = learned_ode_func.theta.detach().clone()
+    p_dim = theta_star.numel()
+    laplace_prefix = "ad_enkf" if filter_mode == "ad" else "em_enkf"
+
+    def enkf_neg_log_likelihood(theta_flat: torch.Tensor) -> torch.Tensor:
+        """
+        Re-run EnKF with given theta and return negative log-likelihood.
+        """
+        theta_flat = theta_flat.to(device)
+        theta_flat = theta_flat.requires_grad_(True)
+
+        # Rebuild ODE with this theta
+        ode_func = GLVParamODE(theta_flat, theta_labels, x_dim=x_dim).to(device)
+
+        # Use same Q structure but with process_std from config
+        q_scale_local = float(cfg.get("process_std", cfg.get("init_Q_diag_scale", 0.05)))
+        init_Q_local = q_scale_local * torch.ones(x_dim, device=device)
+        model_Q_local = noise.AddGaussian(x_dim, init_Q_local, "diag").to(device)
+
+        N_ensem_local = N_ensem
+        X_local = init_C_param(init_m.expand(train_size, N_ensem_local, x_dim))
+        t_start_local = t0
+        log_lik_accum = torch.zeros(train_size, device=device)
+
+        for start in range(0, n_obs, L):
+            end = min(start + L, n_obs)
+
+            if filter_mode == "ad":
+                # AD-EnKF: full adjoint EnKF
+                X_local, _, log_likelihood = da_methods.EnKF(
+                    ode_func,
+                    true_obs_func,
+                    t_obs[start:end],
+                    y_obs[start:end],
+                    N_ensem_local,
+                    init_m,
+                    init_C_param,
+                    model_Q_local,
+                    noise_R_true,
+                    device,
+                    save_filter_step={},
+                    t0=t_start_local,
+                    init_X=X_local,
+                    ode_method=cfg.ode_method,
+                    ode_options=dict(step_size=cfg.ode_step_size),
+                    adjoint=True,
+                    adjoint_method=cfg.adjoint_method,
+                    adjoint_options=dict(step_size=cfg.adjoint_step_size),
+                    tqdm=None,
+                )
+            else:
+                # EM-EnKF: Term A only via EnKF_EM
+                X_local, _, log_likelihood = EnKF_EM(
+                    ode_func,
+                    true_obs_func,
+                    t_obs[start:end],
+                    y_obs[start:end],
+                    N_ensem_local,
+                    init_m,
+                    init_C_param,
+                    model_Q_local,
+                    noise_R_true,
+                    device,
+                    init_X=X_local,
+                    ode_method=cfg.ode_method,
+                    ode_options=dict(step_size=cfg.ode_step_size),
+                    t0=float(t_start_local),
+                    compute_likelihood=True,
+                    tqdm=None,
+                )
+
+            t_start_local = t_obs[end - 1]
+            log_lik_accum += log_likelihood
+
+        neg_ll = -(log_lik_accum.mean())
+        return neg_ll
+
+    try:
+        H = hessian(enkf_neg_log_likelihood, theta_star)
+        H = H.detach()
+        diag_H = torch.diag(H)
+        if torch.any(diag_H <= 0):
+            print("Warning: non-positive Hessian diagonal for gLV Laplace; skipping posterior save.")
+        else:
+            nugget = 1e-5 * torch.eye(p_dim, device=device, dtype=H.dtype)
+            Sigma_post = torch.linalg.inv(H + nugget)
+            std_post = torch.sqrt(torch.diag(Sigma_post).clamp(min=0)).detach().cpu().numpy()
+
+            L_chol = torch.linalg.cholesky(Sigma_post + nugget)
+            z = torch.randn(p_dim, 1000, device=device)
+            theta_samples = (theta_star.to(device).unsqueeze(1) + L_chol @ z).T  # (1000, p_dim)
+            theta_samples_np = theta_samples.detach().cpu().numpy()
+
+            import numpy as _np
+
+            _np.save(run_dir / f"{laplace_prefix}_laplace_theta_posterior.npy", theta_samples_np)
+            _np.save(run_dir / f"{laplace_prefix}_laplace_std.npy", std_post)
+            print(f"Saved gLV {laplace_prefix.upper().replace('_', '-')} Laplace posterior samples and std to run directory.")
+    except RuntimeError as exc:
+        print(f"Warning: Hessian computation for gLV Laplace failed with error: {exc}")
+
 
 if __name__ == "__main__":
+    _SCRIPT_DIR = Path(__file__).resolve().parent
+
+    # Infer filter_mode from CLI overrides (default: "ad")
+    filter_mode_cli = "ad"
+    for arg in sys.argv[1:]:
+        if arg.startswith("filter_mode=") or arg.startswith("filter_mode:"):
+            val = arg.split("=", 1)[-1].split(":", 1)[-1]
+            filter_mode_cli = val.strip().lower()
+            break
+
+    prefix = "AD" if filter_mode_cli == "ad" else "EM"
+    sys.argv.append(f"hydra.run.dir={_SCRIPT_DIR}/runs/{prefix}_glv_param_est_torch")
     run()
 

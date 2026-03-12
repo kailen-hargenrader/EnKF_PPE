@@ -50,9 +50,11 @@ init_cov_diag: [25.0, 25.0, 50.0] # var = 0.25 per dimension in EnKF (potentiall
 init_Q_diag_scale: 0.05
 
 # Training
-epochs: 150
+epochs: 100
 chunk_length: 20
 lr: 0.1
+# Match the original Lorenz-96 script:
+# lambda epoch: (epoch-9)**(-0.5) if epoch >= 10 else 1
 lr_lambda_epoch_start: 30
 lr_lambda_exponent: -0.4
 
@@ -65,9 +67,10 @@ adjoint_step_size: 0.05
 # Output
 save_plot: true
 plot_path: l63_parameter_estimation.png
+filter_mode: ad
 
 hydra:
   job:
     chdir: false
   run:
-    dir: runs/l63_param_est_torch
+    dir: ???
