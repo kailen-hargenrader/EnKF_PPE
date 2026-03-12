@@ -10,6 +10,16 @@
 Experiments/**/runs/
 ADEnKF/experiments/**/runs/
 
+# Generated figures and UQ plot outputs (do not commit)
+ADEnKF/experiments/**/figures/
+ADEnKF/experiments/**/uq_results/
+ADEnKF/experiments/**/uq_results_*/
+ADEnKF/experiments/**/*.png
+ADEnKF/experiments/**/*.pdf
+Data/**/figures/
+Data/**/*.png
+Data/**/*.pdf
+
 # ------------------------------------------------------------
 # Python / OS noise
 # ------------------------------------------------------------

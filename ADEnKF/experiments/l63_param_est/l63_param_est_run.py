@@ -479,5 +479,5 @@ def to_float(x):
 
 if __name__ == "__main__":
     _SCRIPT_DIR = Path(__file__).resolve().parent
-    sys.argv.append(f"hydra.run.dir={_SCRIPT_DIR}/runs/AD_l63_param_est_torch")
+    sys.argv.append(f"hydra.run.dir={_SCRIPT_DIR}/runs/EM_l63_param_est_torch")
     run()

@@ -67,7 +67,7 @@ adjoint_step_size: 0.05
 # Output
 save_plot: true
 plot_path: l63_parameter_estimation.png
-filter_mode: ad
+filter_mode: em
 
 hydra:
   job:
